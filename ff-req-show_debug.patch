@@ -7,6 +7,8 @@ It has all the debug outputs via dump() and printf, but dump() are only visible 
 
 a bunch of names that have 'custom' or 'Custom' should be renamed to 'original' or 'Original', else they're confusing.
 
+future updates should be happening here: https://github.com/dare3path/ff-req-show
+
 diff --git a/devtools/client/netmonitor/src/components/request-list/RequestListItem.js b/devtools/client/netmonitor/src/components/request-list/RequestListItem.js
 index 5004dd5610..59b29cbe9a 100644
 --- a/devtools/client/netmonitor/src/components/request-list/RequestListItem.js
