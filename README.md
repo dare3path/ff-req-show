@@ -13,7 +13,7 @@ This is a proof of concept patch that enhances Firefox’s Netmonitor to show th
 - Before patch:  
 ![No payload for this request](screenshots/extension-blocked/beforepatch_request_uMatrix.png)
 
--After patch:  
+- After patch:  
 ![shows the actual request payload based on Content-type from Headers tab(not shown)](screenshots/extension-blocked/afterpatch_request_uMatrix.png)
 
 **The payload of requests blocked due to `NS_BINDING_ABORTED`:**  
