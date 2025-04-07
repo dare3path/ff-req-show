@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="/xhr2.js"></script>
+  </head>
+  <body>
+    <h1>XHR Test</h1>
+    Press F5 to reload page which will cause a request to be sent which completes in 5 sec.<br>
+    During that 5 sec you can F5 again to see what happens to that previous request, but you'll need to turn on "Persist Logs" in Firefox's devtools aka F12 (and in the Settings cog wheel) beforehand.<br>
+    <button id="xhrButton">Send true "Form data" Request in form format but with an ' and \</button><br>
+    <button id="xhrButton1">Send fake-"Form data" Request in form format(toggle 'Raw' when u view it)</button><br>
+    <button id="xhrButton2">Send fake-"Form data" Request in non-form format with a binary char (toggle 'Raw' when u view it)</button><br>
+    <button id="xhrButton3">Send true-"binary data" Request(auto-Raw)</button><br>
+    <button id="xhrButton4">Send true-"binary data" Request in form format(auto-Raw)</button><br>
+    <button id="xhrButton5">Send 2 byte "[]" Request in text/plain utf8 format</button><br>
+    <button id="xhrButton8">Send 2 byte "[]" Request in form format to a CSP-blockable domain</button><br>
+    <button id="xhrButton6">Send "foo=bar" Request in form format to a CSP-blockable domain</button><br>
+    <button id="xhrButton7">Send ""(empty) Request in form format to a CSP-blockable domain</button><br>
+    <button id="xhrButton9">Send fetch POST with NS_BINDING_ABORTED</button><br>
+    <button id="xhrButton10">Send fetch POST with CORS Failed</button><br>
+    <button id="xhrButton100">bad button(should show a fail in devtools Console)</button><br>
+  <script>
+    //some crappy payload made up (sort of copied from somewhere else and sanitized)
+    const payload = {
+      events: [
+        {
+          eventName: "statsig::diagnostics",
+          user: {},
+          value: null,
+          metadata: {
+            context: "initialize",
+            markers: [
+            ],
+            statsigOptions: { networkConfig: { logEventUrl: "/api/statsig/log_event" }, disableCompression: true, disableStatsigEncoding: true, logLevel: 1 }
+          },
+          time: 1743793610575,
+          statsigMetadata: { currentPage: "http://localhost:8000" }
+        },
+        {
+          eventName: "auto_capture::page_view_end",
+          value: "http://localhost:8000",
+          user: {},
+          time: 1743793617493,
+          statsigMetadata: { currentPage: "http://localhost:8000" }
+        }
+      ],
+      statsigMetadata: {
+        sdkVersion: "3.8.1",
+        sdkType: "javascript-client-react",
+        fallbackUrl: null
+      }
+    };
+
+    const url = "http://notmyserver.com:8080/api/statsig/log_event?k=client-gibberish_here&st=javascript-client-react&sv=3.8.1&t=" + Date.now() + "&sid=someuuid&ec=2";
+
+    let loadCount = parseInt(localStorage.getItem('loadCount') || '0');
+    loadCount++;
+    localStorage.setItem('loadCount', loadCount);
+
+    window.addEventListener('load', () => {
+      const xhr = fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=UTF-8',
+          'Referer': 'http://localhost:8000'
+        },
+        body: JSON.stringify(payload)
+      })
+      .then(res => res.json())
+      .catch(err => console.error('Fetch error:', err));
+
+      // Second load: Navigate away to force abort
+      if (loadCount === 2) {
+        setTimeout(() => {
+          window.location.reload();  // Or window.location = "about:blank"
+        }, 500);  // 500ms delay—abort mid-request
+      }
+    });
+  </script>
+  </body>
+</html>

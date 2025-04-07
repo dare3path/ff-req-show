@@ -1,0 +1,3 @@
+Initial code taken from the attachment in comment 6 of https://bugzilla.mozilla.org/show_bug.cgi?id=1803531#c6
+Modified since as seen in current dir by using xAI's grok3 and grok2 and the occasional duck.ai for simpler things.
+
