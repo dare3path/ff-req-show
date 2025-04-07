@@ -41,5 +41,5 @@ I know nothing about Firefox source code or its internals (XPCOM, channels, etc.
 Licensed under the Mozilla Public License 2.0 (MPL 2.0) just like the Firefox source code. See `LICENSE` for details.
 
 ## Updates
-Future tweaks will live here: https://github.com/dare3path/ff-req-show
-Original Bugzilla bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1958869
+Future tweaks will live here: https://github.com/dare3path/ff-req-show  
+Original Bugzilla bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1958869  
