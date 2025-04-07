@@ -42,4 +42,4 @@ Licensed under the Mozilla Public License 2.0 (MPL 2.0) just like the Firefox so
 
 ## Updates
 Future tweaks will live here: https://github.com/dare3path/ff-req-show
-Original Bugzilla bug: [link once filed]
+Original Bugzilla bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1958869
