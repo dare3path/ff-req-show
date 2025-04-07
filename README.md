@@ -9,25 +9,25 @@ This is a proof of concept patch that enhances Firefox’s Netmonitor to show th
 - Started as a fix for extension-blocked requests (e.g., ad blockers) to see their request's payload, but now applies to any blocked request, that I'm aware of, however the CSP-blocked requests always show a `GET` method and status 200 OK.
 
 ## Screenshots (Firefox 137.0b10 in Arch Linux)
-- The payload of requests blocked by an extension, uMatrix in this case:
-**Before patch:**
+**The payload of requests blocked by an extension, uMatrix in this case:**  
+- Before patch:  
 ![No payload for this request](screenshots/extension-blocked/beforepatch_request_uMatrix.png)
 
-**After patch:**
+-After patch:  
 ![shows the actual request payload based on Content-type from Headers tab(not shown)](screenshots/extension-blocked/afterpatch_request_uMatrix.png)
 
-- The payload of requests blocked due to `NS_BINDING_ABORTED`:
-**Before patch:**
+**The payload of requests blocked due to `NS_BINDING_ABORTED`:**  
+- Before patch:  
 ![No payload for this request](screenshots/NS_BINDING_ABORTED-blocked/beforepatch_request_NSBA.png)
 
-**After patch:**
+- After patch:  
 ![shows the actual request payload based on Content-type from Headers tab(not shown)](screenshots/NS_BINDING_ABORTED-blocked/afterpatch_request_NSBA.png)
 
-- A CSP-blocked request:
-**Before patch is shown as a fake status `200` with a hardcoded(fake) method of `GET`(not `POST` which is the actual):**
+**A CSP-blocked request:**  
+- Before patch is shown as a fake status `200` with a hardcoded(fake) method of `GET`(not `POST` which is the actual):  
 ![No headers for this request](screenshots/CSP-blocked/beforepatch_headers_CSP.png)
 ![No payload for this request](screenshots/CSP-blocked/beforepatch_request_CSP.png)
-**After patch both Headers and Request payload are shown and also the url but the `GET` and the status `200` remained intact and thus still fake):**
+- After patch both Headers and Request payload are shown and also the url but the `GET` and the status `200` remained intact and thus still fake):  
 ![Headers and the url are good but method and status are still fake](screenshots/CSP-blocked/afterpatch_headers_CSP.png)
 ![Request payload is shown](screenshots/CSP-blocked/afterpatch_request_CSP.png)
 
