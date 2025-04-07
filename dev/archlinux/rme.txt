@@ -1,0 +1,29 @@
+This is how you develop the patch if you're running in Arch Linux.
+
+do either:
+$ pkgctl repo clone --protocol=https firefox-developer-edition
+or:
+$ git clone https://gitlab.archlinux.org/archlinux/packaging/packages/firefox-developer-edition.git
+(^ untested)
+
+then:
+$ cd firefox-developer-edition
+
+was tested with:
+commit 95329c97e306e04a379e32ec85f996560a3d4a42 (HEAD -> main, tag: 137.0b10-1, origin/main, origin/HEAD)
+
+so optionally do:
+$ git checkout 95329c97e306e04a379e32ec85f996560a3d4a42
+
+run this to extract and prepare the source:
+$ ./go_first_time_extract_and_prep
+
+then do the modifications for the building:
+$ patch -p1 -i ./mod.patch
+
+then build or (re)compile firefox:
+$ ./go
+
+then run what you've compiled:
+$ ./run
+

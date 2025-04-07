@@ -1,0 +1,19 @@
+#!/usr/bin/bash
+
+echo "Doesn't build, just extracts and runs prepare() from PKGBUILD, do note that the dir is lost in src/firefox-137.0/ so don't run this if you've unsaved changes in there!"
+
+read -rp "This overwrites/unpacks the source again, and doesn't build! Continue? (only \"yes\" will) " answer
+
+if [[ "$answer" == "yes" ]]; then
+    echo "Continuing..."
+    # Insert code for when the answer is "yes"
+elif [[ "$answer" == "no" ]]; then
+    echo "Aborting..."
+    exit 1
+else
+    echo "Invalid input. Please type exactly 'yes' or 'no', case sensitive."
+    exit 1
+fi
+
+time makepkg --nobuild --nocheck --skippgpcheck --noarchive
+

@@ -1,0 +1,4098 @@
+diff --git a/devtools/client/netmonitor/src/connector/firefox-data-provider.js b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+index 0a85eb487e..8e3c04b6e7 100644
+--- a/devtools/client/netmonitor/src/connector/firefox-data-provider.js
++++ b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+@@ -5,6 +5,9 @@
+ 
+ "use strict";
+ 
++//const { ResourceCommand } = require("devtools/shared/commands/resource/resource-command"); // Added this to access RESOURCE_TYPES
++//const { ResourceCommand } = require("devtools/shared/commands/resource/resource-command"); // Correct path
++
+ const {
+   EVENTS,
+   TEST_EVENTS,
+@@ -27,6 +30,11 @@ const {
+  * or not.
+  */
+ class FirefoxDataProvider {
++//  constructor() {
++//    this.on("networkEvent", (event) => {
++//      console.log("Network event:", event); // Catch all requests
++//    });
++//  }
+   /**
+    * Constructor for data provider
+    *
+@@ -37,6 +45,7 @@ class FirefoxDataProvider {
+   constructor({ commands, actions, owner }) {
+     // Options
+     this.commands = commands;
++    //this.owner = owner;
+     this.actions = actions || {};
+     this.actionsEnabled = true;
+ 
+@@ -51,7 +60,22 @@ class FirefoxDataProvider {
+     this._lastRequestDataClearId = 0;
+ 
+     this.owner = owner;
+-
++//    this.networkFront = this.commands.networkCommand; // Ensure this is set
++//    console.log("FirefoxDataProvider initialized, networkFront: " + !!this.networkFront);
++    dump("FirefoxDataProvider initialized\n");
++    Components.utils.reportError("FirefoxDataProvider initialized");
++    // Use NetworkMonitorFront directly
++//    this.networkFront = this.commands.descriptorFront.getFront("networkMonitor");
++//    dump("networkFront set: " + !!this.networkFront + "\n");
++//    dump("Commands keys: " + JSON.stringify(Object.keys(commands)) + "\n");
++//    this.networkFront = commands.targetCommand.getTargetFront("networkMonitor");
++//    dump("networkFront set: " + !!this.networkFront + "\n");
++//    dump("Commands keys: " + JSON.stringify(Object.keys(commands)) + "\n");
++    this.networkFront = this.commands.networkCommand;
++  dump("networkFront set: " + !!this.networkFront + "\n");
++  dump("Commands keys: " + JSON.stringify(Object.keys(commands)) + "\n");
++  // Log networkFront capabilities
++  dump("networkFront methods: " + JSON.stringify(Object.keys(this.networkFront)) + "\n");
+     // This holds stacktraces infomation temporarily. Stacktrace resources
+     // can come before or after (out of order) their related network events.
+     // This will hold stacktrace related info from the NETWORK_EVENT_STACKTRACE resource
+@@ -84,6 +108,70 @@ class FirefoxDataProvider {
+       this.onEventSourceConnectionClosed.bind(this);
+     this.onEventReceived = this.onEventReceived.bind(this);
+     this.setEventStreamFlag = this.setEventStreamFlag.bind(this);
++
++//    dump("FirefoxDataProvider initialized\n");
++//    Components.utils.reportError("FirefoxDataProvider initialized"); // ADDED
++//    this.networkFront = this.commands.networkCommand;
++//    dump("networkFront set: " + !!this.networkFront + "\n");
++//    this.owner = owner; // Store owner for later use
++//    dump("Commands keys: " + JSON.stringify(Object.keys(commands)) + "\n");
++
++    //this.actorFront = this.commands.networkCommand; // Network actor frontend
++    //this.actorFront = this.commands.targetFront.getFront("networkMonitor");
++    //dump("actorFront set: " + !!this.actorFront + "\n");
++
++//    this.owner.onNetworkResourceAvailable = (event) => {
++//      dump("Network resource available: " + JSON.stringify(event) + "\n");
++//      Components.utils.reportError("Network resource available: " + JSON.stringify(event));
++//    };
++//    this.commands.descriptorFront.on("networkEvent", (event) => {
++//  dump("Network event received: " + JSON.stringify(event) + "\n");
++//  Components.utils.reportError("Network event received: " + JSON.stringify(event));
++//});
++
++//    this.commands.targetFront.on("networkEvent", (event) => {
++//  dump("Network event received: " + JSON.stringify(event) + "\n");
++//  Components.utils.reportError("Network event received: " + JSON.stringify(event));
++//});
++//    this.commands.networkCommand.on("networkEvent", (event) => {
++//      dump("Network event received: " + JSON.stringify(event) + "\n");
++//      Components.utils.reportError("Network event received: " + JSON.stringify(event));
++//    });
++
++    //this.commands.networkCommand.target.on("network-event", (event) => {
++    //  console.log("Network event:", event);
++    //});
++    // Start watching network events with correct type
++//    this.commands.resourceCommand.watchResources(
++//      ["network-event"], // Fixed to match ResourceCommand.TYPES.NETWORK_EVENT
++//      {
++//        onAvailable: (resources) => {
++//          dump("Network event available: " + JSON.stringify(resources) + "\n");
++//        },
++//        onUpdated: (updates) => {
++//          dump("Network event updated: " + JSON.stringify(updates) + "\n");
++//        }
++//      }
++//    );
++//    dump("Started watching network-event\n");
++//    this.commands.resourceCommand.watchResources(
++//  ["network-event"],
++//  {
++//    onAvailable: (resources) => {
++//      for (const resource of resources) {
++//        if (resource.resourceType === "network-event") {
++//          const id = resource.resourceId || resource.channelId;
++//          this.networkEventFronts.set(id, resource);
++//          dump("Stored network event front for id: " + id + "\n");
++//        }
++//      }
++//    },
++//    onUpdated: (updates) => {
++//      dump("Network event updated: " + JSON.stringify(updates) + "\n");
++//    }
++//  }
++//);
++//dump("Started watching network-event\n");
+   }
+ 
+   /*
+@@ -138,7 +226,7 @@ class FirefoxDataProvider {
+    * @param {string} id request id
+    * @param {object} data data payload will be updated to application state
+    */
+-  async updateRequest(id, data) {
++/*  async updateRequest(id, data) {
+     const {
+       responseContent,
+       responseCookies,
+@@ -189,8 +277,46 @@ class FirefoxDataProvider {
+     }
+ 
+     return payload;
++  }*/
++  async updateRequest(id, data) {
++  const { responseContent, responseCookies, responseHeaders, earlyHintsResponseHeaders, requestCookies, requestHeaders, requestPostData, responseCache } = data;
++
++    dump("updateRequest called, id: " + id + ", data: " + JSON.stringify(data) + "\n"); // Added: Log input
++  // Fetch postData first to avoid race
++  const postDataObj = await this.fetchPostData(requestPostData);
++    dump("PostData fetched: " + JSON.stringify(postDataObj) + "\n"); // Added: Log postData
++
++  // Then fetch the rest in parallel
++  const [responseContentObj, requestHeadersObj, responseHeadersObj, earlyHintsResponseHeadersObj, requestCookiesObj, responseCookiesObj, responseCacheObj] = await Promise.all([
++    this.fetchResponseContent(responseContent),
++    this.fetchRequestHeaders(requestHeaders),
++    this.fetchResponseHeaders(responseHeaders),
++    this.fetchEarlyHintResponseHeaders(earlyHintsResponseHeaders),
++    this.fetchRequestCookies(requestCookies),
++    this.fetchResponseCookies(responseCookies),
++    this.fetchResponseCache(responseCache),
++  ]);
++
++  const payload = Object.assign(
++    {},
++    data,
++    responseContentObj,
++    requestHeadersObj,
++    responseHeadersObj,
++    earlyHintsResponseHeadersObj,
++    postDataObj,
++    requestCookiesObj,
++    responseCookiesObj,
++    responseCacheObj
++  );
++
++  if (this.actionsEnabled && this.actions.updateRequest) {
++    await this.actions.updateRequest(id, payload, true);
+   }
+ 
++  return payload;
++}
++
+   async fetchResponseContent(responseContent) {
+     const payload = {};
+     if (responseContent?.content) {
+@@ -238,28 +364,3089 @@ class FirefoxDataProvider {
+     return payload;
+   }
+ 
+-  async fetchPostData(requestPostData) {
+-    const payload = {};
+-    if (requestPostData?.postData) {
+-      const { text } = requestPostData.postData;
+-      const postData = await this.getLongString(text);
+-      const headers = CurlUtils.getHeadersFromMultipartText(postData);
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  if (!requestPostData || !requestPostData.postData) {
++    dump("No postData, fetching from actor\n");
++    try {
++      const requestId = requestPostData?.requestId;
++      if (!requestId) {
++        dump("No requestId, cannot fetch\n");
++        return payload;
++      }
++      const actor = await this.actorFront.getNetworkEvent(requestId);
++      dump("Got actor: " + !!actor + "\n");
++      if (actor) {
++        const postDataResponse = await actor.getRequestPostData();
++        dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++        requestPostData = postDataResponse;
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No actor found for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from actor: " + e + "\n");
++    }
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++  }
++*/
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  if (!requestPostData || !requestPostData.postData) {
++    dump("No postData, fetching from actor\n");
++    try {
++      const requestId = requestPostData?.requestId;
++      if (!requestId) {
++        dump("No requestId, cannot fetch\n");
++        return payload;
++      }
++      // Use owner to get the network monitor front
++      const networkMonitorFront = this.owner.networkMonitorFront;
++      if (!networkMonitorFront) {
++        dump("No networkMonitorFront available\n");
++        return payload;
++      }
++      const actor = await networkMonitorFront.getNetworkEvent(requestId);
++      dump("Got actor: " + !!actor + "\n");
++      if (actor) {
++        const postDataResponse = await actor.getRequestPostData();
++        dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++        requestPostData = postDataResponse;
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No actor found for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from actor: " + e + "\n");
++    }
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  let requestId = requestPostData?.requestId;
+ 
+-      // Calculate total header size and don't forget to include
+-      // two new-line characters at the end.
+-      const headersSize = headers.reduce((acc, { name, value }) => {
+-        return acc + name.length + value.length + 2;
+-      }, 0);
++  if (!requestId && this.owner && this.owner.selectedRequest) {
++    requestId = this.owner.selectedRequest.id;
++    dump("Using selectedRequest id: " + requestId + "\n");
++  }
+ 
+-      requestPostData.postData.text = postData;
+-      payload.requestPostData = {
+-        ...requestPostData,
+-        uploadHeaders: { headers, headersSize },
+-      };
++  if (!requestId) {
++    dump("No requestId available, returning empty payload\n");
++    return payload;
++  }
++
++  try {
++    const actor = await this.networkFront.getNetworkEvent(requestId);
++    dump("Got actor: " + !!actor + "\n");
++    if (actor) {
++      const postDataResponse = await actor.getRequestPostData();
++      dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++      if (postDataResponse && postDataResponse.postData) {
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No postData in response\n");
++      }
++    } else {
++      dump("No actor found for requestId: " + requestId + "\n");
++    }
++  } catch (e) {
++    dump("Error fetching from actor: " + e + "\n");
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}
++*/
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  let requestId = requestPostData?.requestId;
++
++  if (!requestId && this.owner) {
++    dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++    if (this.owner.selectedRequest) {
++      requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++      dump("Using selectedRequest id/channelId: " + requestId + "\n");
++    } else if (this.owner.currentRequest) {
++      requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++      dump("Using currentRequest id/channelId: " + requestId + "\n");
++    }
++  }
++
++  if (!requestId && requestPostData?.from) {
++    requestId = requestPostData.from; // Try 'from' as a fallback
++    dump("Using from as requestId: " + requestId + "\n");
++  }
++
++  if (!requestId) {
++    dump("No requestId available, returning empty payload\n");
++    return payload;
++  }
++
++  try {
++    const actor = await this.networkFront.getNetworkEvent(requestId);
++    dump("Got actor: " + !!actor + "\n");
++    if (actor) {
++      const postDataResponse = await actor.getRequestPostData();
++      dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++      if (postDataResponse && postDataResponse.postData) {
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No postData in response\n");
++      }
++    } else {
++      dump("No actor found for requestId: " + requestId + "\n");
++    }
++  } catch (e) {
++    dump("Error fetching from actor: " + e + "\n");
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  let requestId = requestPostData?.requestId;
++
++  if (!requestId && requestPostData?.from) {
++    requestId = requestPostData.from;
++    dump("Using from as requestId: " + requestId + "\n");
++  }
++
++  if (!requestId && this.owner) {
++    dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++    if (this.owner.selectedRequest) {
++      requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++      dump("Using selectedRequest id/channelId: " + requestId + "\n");
++    } else if (this.owner.currentRequest) {
++      requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++      dump("Using currentRequest id/channelId: " + requestId + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId available, returning empty payload\n");
++    return payload;
++  }
++
++  try {
++    const actor = await this.networkFront.getNetworkEvent(requestId);
++    dump("Got actor: " + !!actor + "\n");
++    if (actor) {
++      const postDataResponse = await actor.getRequestPostData();
++      dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++      if (postDataResponse && postDataResponse.postData) {
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No postData in response\n");
++      }
++    } else {
++      dump("No actor found for requestId: " + requestId + "\n");
++    }
++  } catch (e) {
++    dump("Error fetching from actor: " + e + "\n");
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  let requestId = requestPostData?.requestId;
++
++  if (!requestId && requestPostData?.from) {
++    requestId = requestPostData.from;
++    dump("Using from as requestId: " + requestId + "\n");
++  }
++
++  if (!requestId && this.owner) {
++    dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++    if (this.owner.selectedRequest) {
++      requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++      dump("Using selectedRequest id/channelId: " + requestId + "\n");
++    } else if (this.owner.currentRequest) {
++      requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++      dump("Using currentRequest id/channelId: " + requestId + "\n");
+     }
++  }
++
++  if (!requestId) {
++    dump("No requestId available, falling back to latest network event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources(
++        this.commands.resourceCommand.RESOURCE_TYPES.NETWORK_EVENT
++      );
++      dump("Network events fetched: " + networkEvents.length + "\n");
++      if (networkEvents.length > 0) {
++        const latestEvent = networkEvents[networkEvents.length - 1];
++        requestId = latestEvent.resourceId || latestEvent.channelId;
++        dump("Using latest event id: " + requestId + "\n");
++      }
++  }
++
++  if (!requestId) {
++    dump("Still no requestId, returning empty payload\n");
+     return payload;
+   }
+ 
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources(
++      this.commands.resourceCommand.RESOURCE_TYPES.NETWORK_EVENT
++    );
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++    if (event && event.actor) {
++      const postDataResponse = await event.actor.getRequestPostData();
++      dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++      if (postDataResponse && postDataResponse.postData) {
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No postData in response\n");
++      }
++    } else {
++      dump("No matching network event for requestId: " + requestId + "\n");
++    }
++  } catch (e) {
++    dump("Error fetching from resourceCommand: " + e + "\n");
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++      if (event) {
++        dump("Event details: " + JSON.stringify(event) + "\n");
++        // Check if actor is a front or needs fetching
++        if (event.actor && typeof event.actor.getRequestPostData === "function") {
++          const postDataResponse = await event.actor.getRequestPostData();
++          dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++          if (postDataResponse && postDataResponse.postData) {
++            payload.postData = postDataResponse.postData;
++          } else {
++            dump("No postData in response\n");
++          }
++        } else if (event.actor) {
++          // Try fetching the actor manually
++          const actorFront = await this.networkFront.getNetworkEvent(event.actor); // Use actor as ID
++          if (actorFront) {
++            const postDataResponse = await actorFront.getRequestPostData();
++            dump("Actor front returned: " + JSON.stringify(postDataResponse) + "\n");
++            if (postDataResponse && postDataResponse.postData) {
++              payload.postData = postDataResponse.postData;
++            } else {
++              dump("No postData from actor front\n");
++            }
++          } else {
++            dump("No actor front fetched\n");
++          }
++        } else {
++          dump("No valid actor in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + ", channelId: " + (event.channelId || "undefined") + ", actor: " + (event.actor ? event.actor.actorID || event.actor : "no actor") + "\n");
++        if (typeof event.getRequestPostData === "function") {
++          const postDataResponse = await event.getRequestPostData();
++          dump("Event returned: " + JSON.stringify(postDataResponse) + "\n");
++          if (postDataResponse && postDataResponse.postData) {
++            payload.postData = postDataResponse.postData;
++          } else {
++            dump("No postData from event\n");
++          }
++        } else {
++          dump("Event lacks getRequestPostData, keys: " + JSON.stringify(Object.keys(event)) + "\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  } //GOOD!
++  */
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + ", channelId: " + (event.channelId || "undefined") + ", actor: " + (event.actor ? event.actor.actorID || event.actor : "no actor") + "\n");
++        let actorId = typeof event.actor === "string" ? event.actor : event.actor?.actorID;
++        if (actorId) {
++          // Fetch the NetworkEventActor front using the actor ID
++          const front = await this.commands.client.getFront("networkEvent", actorId);//fail
++          if (front && typeof front.getRequestPostData === "function") {
++            const postDataResponse = await front.getRequestPostData();
++            dump("Front returned: " + JSON.stringify(postDataResponse) + "\n");
++            if (postDataResponse && postDataResponse.postData) {
++              payload.postData = postDataResponse.postData;
++            } else {
++              dump("No postData from front\n");
++            }
++          } else {
++            dump("No valid front fetched or no getRequestPostData method\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + 
++            ", channelId: " + (event.channelId || "undefined") + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        let actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          const response = await client.request({
++            to: actorId,
++            type: "getRequestPostData"
++          });
++          dump("Raw client response: " + JSON.stringify(response) + "\n");
++          if (response && response.postData && response.postData.text) {
++            payload.postData = response.postData;
++          } else {
++            dump("No postData text in response, full response: " + JSON.stringify(response) + "\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }  //GOOD3
++  */
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + 
++            ", channelId: " + (event.channelId || "undefined") + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        let actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          // Small delay to test timing
++          await new Promise(resolve => setTimeout(resolve, 100));
++          const response = await client.request({
++            to: actorId,
++            type: "getRequestPostData"
++          });
++          dump("Raw client response: " + JSON.stringify(response) + "\n");
++          if (response && response.postData && response.postData.text) {
++            payload.postData = response.postData;
++          } else {
++            dump("No postData text in response, full response: " + JSON.stringify(response) + "\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  } //GOOD4
++  */
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        let actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          const postDataResponse = await client.request({
++            to: actorId,
++            type: "getRequestPostData"
++          });
++          dump("PostData response: " + JSON.stringify(postDataResponse) + "\n");
++          if (postDataResponse && postDataResponse.postData && postDataResponse.postData.text) {
++            payload.postData = postDataResponse.postData;
++          }
++
++          const headersResponse = await client.request({
++            to: actorId,
++            type: "getRequestHeaders"
++          });
++          dump("Headers response: " + JSON.stringify(headersResponse) + "\n");
++          if (headersResponse && headersResponse.headers) {
++            payload.headers = headersResponse.headers;
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = { postData: null, headers: null }; // Explicit structure
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        let actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          try {
++            const postDataResponse = await client.request({
++              to: actorId,
++              type: "getRequestPostData"
++            });
++            dump("PostData response: " + JSON.stringify(postDataResponse) + "\n");
++            if (postDataResponse && postDataResponse.postData) {
++              payload.postData = postDataResponse.postData; // Match expected structure
++            } else {
++              dump("No postData in response\n");
++            }
++          } catch (e) {
++            dump("Error fetching postData: " + e + "\n");
++          }
++
++          try {
++            const headersResponse = await client.request({
++              to: actorId,
++              type: "getRequestHeaders"
++            });
++            dump("Headers response: " + JSON.stringify(headersResponse) + "\n");
++            if (headersResponse && headersResponse.headers) {
++              payload.headers = headersResponse.headers;
++            } else {
++              dump("No headers in response\n");
++            }
++          } catch (e) {
++            dump("Error fetching headers: " + e + "\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++/*   async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = { postData: null, headers: null };
++
++    let requestId = requestPostData?.requestId;
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      dump("Network events after fetch: " + networkEvents.length + "\n");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event found: resourceId: " + event.resourceId + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        const actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          dump("Client mainRoot available: " + !!client + "\n");
++
++          // Fetch postData
++          try {
++            dump("Requesting getRequestPostData for actor: " + actorId + "\n");
++            const postDataResponse = await client.request({
++              to: actorId,
++              type: "getRequestPostData"
++            });
++            dump("PostData response: " + JSON.stringify(postDataResponse) + "\n");
++            if (postDataResponse && postDataResponse.postData) {
++              payload.postData = postDataResponse.postData;
++              dump("PostData set: " + JSON.stringify(payload.postData) + "\n");
++            } else {
++              dump("No postData in response\n");
++            }
++          } catch (e) {
++            dump("Error fetching postData: " + e + "\n");
++          }
++
++//          // Fetch headers
++//          try {
++//            dump("Requesting getRequestHeaders for actor: " + actorId + "\n");
++//            const headersResponse = await client.request({
++//              to: actorId,
++//              type: "getRequestHeaders"
++//            });
++//            dump("Headers response: " + JSON.stringify(headersResponse) + "\n");
++//            if (headersResponse && headersResponse.headers) {
++//              payload.headers = headersResponse.headers;
++//              dump("Headers set: " + JSON.stringify(payload.headers) + "\n");
++//            } else {
++//              dump("No headers in response\n");
++//            }
++//          } catch (e) {
++//            dump("Error fetching headers: " + e + "\n");
++//          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++
++     // Extract headers from the payload using CurlUtils
++    let headers;
++    try {
++      headers = CurlUtils.getHeadersFromMultipartText(postDataText);
++      dump("Extracted headers: " + JSON.stringify(headers) + "\n");
++    } catch (e) {
++      dump("Error extracting headers with CurlUtils: " + e + "\n");
++      headers = [];
++    }
++
++    // Calculate headersSize (name + value + 2 for colon and space/newlines)
++    const headersSize = headers.reduce((acc, { name, value }) => {
++      return acc + name.length + value.length + 2;
++    }, 0);
++    dump("Calculated headersSize: " + headersSize + "\n");
++
++    // Build the payload structure
++    payload.requestPostData = {
++      postData: { text: postDataText },
++      uploadHeaders: { headers, headersSize },
++    };
++
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }
++//still failing headers tho, ie. hangs
++    */
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: null };
++
++  let actorId;
++  if (requestPostData?.from) {
++    actorId = requestPostData.from;
++    dump("Using from as actorId: " + actorId + "\n");
++  } else if (this.owner?.selectedRequest?.actor) {
++    actorId = this.owner.selectedRequest.actor;
++    dump("Using selectedRequest actor: " + actorId + "\n");
++  } else {
++    dump("Falling back to latest network event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      dump("Network events fetched: " + networkEvents.length + "\n");
++      if (networkEvents.length > 0) {
++        actorId = networkEvents[networkEvents.length - 1].actor;
++        dump("Using latest event actor: " + actorId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching latest event: " + e + "\n");
++    }
++  }
++
++  if (!actorId) {
++    dump("No actorId, setting fallback payload\n");
++    payload.requestPostData = {
++      postData: { text: "(No payload available)" },
++      uploadHeaders: { headers: [], headersSize: 0 },
++    };
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }
++
++  try {
++    const front = await this.commands.client.mainRoot.getFront("networkEvent", actorId);
++    dump("Got front for actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const postDataResponse = await front.getRequestPostData();
++      dump("PostData response: " + JSON.stringify(postDataResponse) + "\n");
++      if (postDataResponse?.postData?.text) {
++        postDataText = postDataResponse.postData.text;
++        dump("PostData text: " + postDataText + "\n");
++      } else {
++        postDataText = "(No payload data)";
++        dump("No postData text in response\n");
++      }
++    } catch (e) {
++      dump("Error fetching postData: " + e + "\n");
++      postDataText = "(Error fetching payload)";
++    }
++
++    // Extract headers from the payload using CurlUtils
++    let headers;
++    try {
++      headers = CurlUtils.getHeadersFromMultipartText(postDataText);
++      dump("Extracted headers: " + JSON.stringify(headers) + "\n");
++    } catch (e) {
++      dump("Error extracting headers with CurlUtils: " + e + "\n");
++      headers = [];
++    }
++
++    // Calculate headersSize (name + value + 2 for colon and space/newlines)
++    const headersSize = headers.reduce((acc, { name, value }) => {
++      return acc + name.length + value.length + 2;
++    }, 0);
++    dump("Calculated headersSize: " + headersSize + "\n");
++
++    // Build the payload structure
++    payload.requestPostData = {
++      postData: { text: postDataText },
++      uploadHeaders: { headers, headersSize },
++    };
++  } catch (e) {
++    dump("Error getting front or fetching data: " + e + "\n");
++    payload.requestPostData = {
++      postData: { text: "(Error in fetch)" },
++      uploadHeaders: { headers: [], headersSize: 0 },
++    };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/* KINDA GOOD
++async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = { postData: null, headers: null }; // Adjusted to hold both
++
++  let requestId = requestPostData?.requestId;
++
++  if (!requestId && requestPostData?.from) {
++    requestId = requestPostData.from;
++    dump("Using from as requestId: " + requestId + "\n");
++  }
++
++  if (!requestId && this.owner) {
++    dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++    if (this.owner.selectedRequest) {
++      requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++      dump("Using selectedRequest id/channelId: " + requestId + "\n");
++    } else if (this.owner.currentRequest) {
++      requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++      dump("Using currentRequest id/channelId: " + requestId + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId available, falling back to latest network event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      dump("Network events fetched: " + networkEvents.length + "\n");
++      if (networkEvents.length > 0) {
++        const latestEvent = networkEvents[networkEvents.length - 1];
++        requestId = latestEvent.resourceId || latestEvent.channelId;
++        dump("Using latest event id: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching latest event: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("Still no requestId, returning empty payload\n");
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => 
++      e.resourceId === requestId || 
++      e.channelId === requestId || 
++      (requestPostData?.from && e.actor === requestPostData.from)
++    );
++    if (event) {
++      dump("Event resourceId: " + event.resourceId + 
++          ", actor: " + (event.actor || "no actor") + 
++          ", method: " + (event.method || "no method") + 
++          ", url: " + (event.url || "no url") + "\n");
++      let actorId = event.actor;
++      if (actorId) {
++        const client = this.commands.client.mainRoot;
++
++        // Fetch payload
++        let postDataText;
++        try {
++          dump("!!!before getting stuck\n");
++          dump("Sending getRequestPostData to actor: " + actorId + "\n");
++//          const postDataResponse = await client.request({
++//            to: actorId,
++//            type: "getRequestPostData"
++//          });
++          const postDataResponse = await Promise.race([
++            client.request({ to: actorId, type: "getRequestPostData" }),
++            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 5s")), 5000))
++          ]);
++          dump("!!!after, PostData response: " + JSON.stringify(postDataResponse) + "\n");
++          if (postDataResponse && postDataResponse.postData && postDataResponse.postData.text) {
++            payload.postData = postDataResponse.postData;
++            postDataText = postDataResponse.postData.text;
++            dump("PostData text set: " + postDataText + "\n");
++          } else {
++            dump("No postData text in response\n");
++            postDataText = "(No payload data)";
++            payload.postData = { text: postDataText };
++          }
++        } catch (e) {
++          dump("!!! after, Error fetching postData: " + e + "\n");
++          postDataText = "(Error fetching payload)";
++          payload.postData = { text: postDataText };
++        }
++
++        // Fetch headers using CurlUtils
++        try {
++          const headers = CurlUtils.getHeadersFromMultipartText(postDataText);
++          dump("Extracted headers: " + JSON.stringify(headers) + "\n");
++          const headersSize = headers.reduce((acc, { name, value }) => {
++            return acc + name.length + value.length + 2;
++          }, 0);
++          dump("Calculated headersSize: " + headersSize + "\n");
++          payload.headers = headers;
++          payload.uploadHeaders = { headers, headersSize }; // Add for Network tab compatibility
++        } catch (e) {
++          dump("Error extracting headers with CurlUtils: " + e + "\n");
++          payload.headers = [];
++          payload.uploadHeaders = { headers: [], headersSize: 0 };
++        }
++      } else {
++        dump("No actor ID found in event\n");
++        payload.postData = { text: "(No payload data)" };
++        payload.headers = [];
++        payload.uploadHeaders = { headers: [], headersSize: 0 };
++      }
++    } else {
++      dump("No matching network event for requestId: " + requestId + "\n");
++      payload.postData = { text: "(No matching event)" };
++      payload.headers = [];
++      payload.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Error fetching from resourceCommand: " + e + "\n");
++    payload.postData = { text: "(Error in fetch)" };
++    payload.headers = [];
++    payload.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { postData: null, headers: null };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.postData = { text: "(No request ID)" };
++    payload.headers = [];
++    payload.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.postData = { text: "(No event or actor)" };
++      payload.headers = [];
++      payload.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 1s")), 1000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      postDataText = "(Error: " + e.message + ")";
++      payload.postData = { text: postDataText };
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText);
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.headers = headers;
++      payload.uploadHeaders = { headers, headersSize };
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.headers = [];
++      payload.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.postData = { text: "(Fetch error)" };
++    payload.headers = [];
++    payload.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2s")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || null;
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      postDataText = null; // Let UI show "No payload" if it fails
++      payload.requestPostData.postData = { text: postDataText };
++    }
++
++    try {
++      const headers = postDataText ? CurlUtils.getHeadersFromMultipartText(postDataText) : [];
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: null };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++} // THIS IS GOOD 22:05 31mar 2025
++*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      postDataText = "(Error: " + e.message + ")";
++      payload.requestPostData.postData = { text: postDataText };
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++} good even tho timeouts*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      if (e.message.includes("Timeout")) {
++        dump("Attempting direct actor fetch\n");
++        try {
++          // Use "networkEvent" front type based on actor name
++          dump("!!!before\n");
++          const front = await client.getFront("networkEvent", { actor: actorId });
++          dump("!!!after\n");
++          const response = await front.getRequestPostData();
++          postDataText = response?.postData?.text || "(Direct fetch failed)";
++          dump("Direct fetch result: " + postDataText + "\n");
++          payload.requestPostData.postData = { text: postDataText };
++        } catch (directE) {
++          dump("Direct fetch error: " + directE + "\n");
++          postDataText = "(Error: " + e.message + ")";
++          payload.requestPostData.postData = { text: postDataText };
++        }
++      } else {
++        postDataText = "(Error: " + e.message + ")";
++        payload.requestPostData.postData = { text: postDataText };
++      }
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      // Keep dummy headers for now
++      const dummyHeaders = [
++        { name: "X-Dummy-Header", value: "Test-Value" },
++        { name: "X-Fake", value: "123" }
++      ];
++      const dummySize = dummyHeaders.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      payload.requestPostData.uploadHeaders = { headers: dummyHeaders, headersSize: dummySize };
++      dump("Set dummy uploadHeaders: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await client.request({ to: actorId, type: "getRequestPostData" });
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++    } catch (e) {
++      dump("Error fetching postData: " + e + "\n");
++      dump("Attempting direct actor fetch\n");
++      try {
++        const front = await client.getFront("networkEvent", { actor: actorId });
++        dump("Got front: " + (front ? "success" : "null") + "\n");
++        if (front) {
++          const response = await front.getRequestPostData();
++          postDataText = response?.postData?.text || "(Direct fetch failed)";
++          dump("Direct fetch result: " + postDataText + "\n");
++        } else {
++          throw new Error("Front is null");
++        }
++      } catch (directE) {
++        dump("Direct fetch error: " + directE + "\n");
++        // Fallback to event data
++        postDataText = event.postDataText || "(No event postDataText)";
++        dump("Falling back to event data: " + postDataText + "\n");
++      }
++    }
++
++    payload.requestPostData.postData = { text: postDataText };
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      dump("!!!before\n");
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("!!! PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++    } catch (e) {
++      dump("Error fetching postData: " + e + "\n");
++      // Fallback to event data or last known good
++      postDataText = event.postDataText || "name=FAKE&time=" + Date.now(); // Fake it with timestamp
++      dump("Falling back to event or fake data: " + postDataText + "\n");
++    }
++
++    payload.requestPostData.postData = { text: postDataText };
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: null }; // Unchanged: Null for no ID
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: null }; // Unchanged: Null for no event
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++    }
++
++    let postDataText;
++    const client = this.commands.client;
++    const actorId = event.actor;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    try {
++      const packet = { to: actorId, type: "getRequestPostData" };
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request(packet),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response: " + JSON.stringify(postDataResponse) + " after " + elapsed + "ms\n");
++
++      if (postDataResponse.postData?.text?.substring) {
++        postDataText = await postDataResponse.postData.text.substring(0, postDataResponse.postData.text.length);
++        dump("Extracted LongStringActor text: " + postDataText + "\n");
++      } else {
++        postDataText = postDataResponse.postData?.text; // Unchanged: Undefined if null
++        dump("Extracted text: " + (postDataText || "null") + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching postData: " + e + "\n");
++      postDataText = null; // Changed: Null instead of fake data
++      dump("Falling back to null: " + postDataText + "\n"); // Changed: Log null
++    }
++
++    payload.requestPostData.postData = { text: postDataText }; // Unchanged: Pass as-is (null if no data)
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || ""); // Unchanged: Keep as is
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: null }; // Unchanged: Null for outer error
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n"); // Unchanged: Log input
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } }; // Unchanged: Default payload
++
++  let requestId = requestPostData?.requestId || requestPostData?.from; // Unchanged: Get requestId from input
++  if (!requestId && this.owner) { // Unchanged: Fallback to owner if no requestId
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId; // Unchanged: Owner properties
++  }
++
++  if (!requestId) { // Unchanged: No requestId, try latest event
++    dump("No requestId, falling back to latest event\n"); // Unchanged: Log fallback
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event"); // Unchanged: Fetch events
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId; // Unchanged: Last event ID
++      dump("Latest event ID: " + requestId + "\n"); // Unchanged: Log latest ID
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n"); // Unchanged: Log error
++    }
++  }
++
++  if (!requestId) { // Unchanged: Still no ID, return empty
++    dump("No requestId found\n"); // Unchanged: Log no ID
++    payload.requestPostData.postData = { text: "(No request ID)" }; // Unchanged: Empty postData
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; // Unchanged: Empty headers
++    return payload; // Unchanged: Early return
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event"); // Unchanged: Fetch events
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from); // Unchanged: Find event
++    if (!event || !event.actor) { // Unchanged: No event/actor check
++      dump("No event or actor for requestId: " + requestId + "\n"); // Unchanged: Log no event
++      payload.requestPostData.postData = { text: "(No event or actor)" }; // Unchanged: Empty postData
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; // Unchanged: Empty headers
++      return payload; // Unchanged: Early return
++    }
++
++    let postDataText; // Unchanged: Declare postDataText
++    const client = this.commands.client; // Unchanged: Use client, not mainRoot
++    const actorId = event.actor; // Unchanged: Get actor ID
++    dump("Sending getRequestPostData to actor: " + actorId + "\n"); // Unchanged: Log request
++
++    try {
++      const packet = { to: actorId, type: "getRequestPostData" }; // Unchanged: Build packet
++      const startTime = Date.now(); // Unchanged: Start timer
++      const postDataResponse = await Promise.race([ // Unchanged: Race request with timeout
++        client.request(packet), // Unchanged: Send request
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000)) // Unchanged: 2s timeout
++      ]);
++      const elapsed = Date.now() - startTime; // Unchanged: Calc time
++      dump("PostData response: " + JSON.stringify(postDataResponse) + " after " + elapsed + "ms\n"); // Unchanged: Log response
++
++      // Changed: Simplified—no LongStringActor check since your latest returns string
++      postDataText = postDataResponse.postData?.text || "(No payload data)"; // Changed: Direct text, no substring
++      dump("Extracted text: " + postDataText + "\n"); // Changed: Log as extracted text
++    } catch (e) {
++      dump("Error fetching postData: " + e + "\n"); // Unchanged: Log error
++      postDataText = "name=John&time=" + Date.now(); // Changed: Simplified fallback, no event check
++      dump("Falling back to fake data: " + postDataText + "\n"); // Unchanged: Log fallback
++    }
++
++    payload.requestPostData.postData = { text: postDataText }; // Unchanged: Set postData
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || ""); // Changed: Restored original CurlUtils call
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0); // Unchanged: Calc size
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n"); // Unchanged: Log headers
++      payload.requestPostData.uploadHeaders = { headers, headersSize }; // Unchanged: Set headers
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n"); // Unchanged: Log set headers
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n"); // Unchanged: Log error
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; // Unchanged: Empty headers on fail
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n"); // Unchanged: Log outer error
++    payload.requestPostData.postData = { text: "(Fetch error)" }; // Unchanged: Empty postData
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; // Unchanged: Empty headers
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n"); // Unchanged: Log payload
++  return payload; // Unchanged: Return payload
++}*/
++/* works: 01:23 01april2025
++async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    //dump("Event details: " + JSON.stringify(event) + "\n");//cyclic error
++
++    let postDataText;
++    const client = this.commands.client; // Changed from mainRoot
++    const actorId = event.actor;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    try {
++      const packet = { to: actorId, type: "getRequestPostData" };
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request(packet),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response: " + JSON.stringify(postDataResponse) + " after " + elapsed + "ms\n");
++
++      if (postDataResponse.postData?.text?.substring) {
++        postDataText = await postDataResponse.postData.text.substring(0, postDataResponse.postData.text.length);
++        dump("Extracted LongStringActor text: " + postDataText + "\n");
++      } else {
++        postDataText = postDataResponse.postData?.text || "(No payload data)";
++        dump("Direct text: " + postDataText + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching postData: " + e + "\n");
++      postDataText = event.postData?.text || event.request?.postData?.text || "name=John&time=" + Date.now();
++      dump("Falling back to event or fake data: " + postDataText + "\n");
++    }
++
++    payload.requestPostData.postData = { text: postDataText };
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      if (e.message.includes("Timeout")) {
++        dump("Attempting direct actor fetch\n");
++        try {
++          const front = await Promise.race([
++            //client.getFront("networkEvent", { actor: actorId }),
++            client.getFront("networkContent", { actor: actorId }),
++            new Promise((_, reject) => setTimeout(() => reject(new Error("Front timeout after 1000ms")), 1000))
++          ]);
++          dump("Got front: " + (front ? "success" : "null") + "\n");
++          if (front) {
++            const response = await front.getRequestPostData();
++            postDataText = response?.postData?.text || "(Direct fetch failed)";
++            dump("Direct fetch result: " + postDataText + "\n");
++            payload.requestPostData.postData = { text: postDataText };
++          } else {
++            throw new Error("Front is null");
++          }
++        } catch (directE) {
++          dump("Direct fetch error: " + directE + "\n");
++          postDataText = "name=FAKE&time=1743459999999"; // Fake it
++          dump("Falling back to fake payload: " + postDataText + "\n");
++          payload.requestPostData.postData = { text: postDataText };
++        }
++      } else {
++        postDataText = "(Error: " + e.message + ")";
++        payload.requestPostData.postData = { text: postDataText };
++      }
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++} was ok 23:14 31mar2025*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      if (e.message.includes("Timeout")) {
++        dump("Attempting direct actor fetch\n");
++        try {
++          const front = await Promise.race([
++            client.mainRoot.getFront("networkEvent", { actor: actorId }),
++            new Promise((_, reject) => setTimeout(() => reject(new Error("Front timeout after 1000ms")), 1000))
++          ]);
++          dump("Got front: " + (front ? "success" : "null") + "\n");
++          if (front) {
++            const response = await front.getRequestPostData();
++            postDataText = response?.postData?.text || "(Direct fetch failed)";
++            dump("Direct fetch result: " + postDataText + "\n");
++            payload.requestPostData.postData = { text: postDataText };
++          } else {
++            throw new Error("Front is null");
++          }
++        } catch (directE) {
++          dump("Direct fetch error: " + directE + "\n");
++          // Fallback to fake payload for testing
++          postDataText = "name=John&time=1743459999999"; // Fake it
++          dump("Falling back to fake payload: " + postDataText + "\n");
++          payload.requestPostData.postData = { text: postDataText };
++        }
++      } else {
++        postDataText = "(Error: " + e.message + ")";
++        payload.requestPostData.postData = { text: postDataText };
++      }
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      if (e.message.includes("Timeout")) {
++        dump("Attempting direct actor fetch\n");
++        try {
++          const front = await Promise.race([
++            client.getFront("networkEvent", { actor: actorId }),
++            new Promise((_, reject) => setTimeout(() => reject(new Error("Front timeout after 1000ms")), 1000))
++          ]);
++          dump("Got front: " + (front ? "success" : "null") + "\n");
++          if (front) {
++            const response = await front.getRequestPostData();
++            postDataText = response?.postData?.text || "(Direct fetch failed)";
++            dump("Direct fetch result: " + postDataText + "\n");
++            payload.requestPostData.postData = { text: postDataText };
++          } else {
++            throw new Error("Front is null");
++          }
++        } catch (directE) {
++          dump("Direct fetch error: " + directE + "\n");
++          postDataText = "(Error: " + e.message + " + Direct: " + directE.message + ")";
++          payload.requestPostData.postData = { text: postDataText };
++        }
++      } else {
++        postDataText = "(Error: " + e.message + ")";
++        payload.requestPostData.postData = { text: postDataText };
++      }
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      payload.requestPostData.uploadHeaders = { headers, headersSize };
++      dump("Set uploadHeaders from CurlUtils: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { requestPostData: { postData: null, uploadHeaders: null } };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner) {
++    requestId = this.owner.selectedRequest?.id || this.owner.selectedRequest?.channelId ||
++                this.owner.currentRequest?.id || this.owner.currentRequest?.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      requestId = networkEvents[networkEvents.length - 1]?.resourceId || networkEvents[networkEvents.length - 1]?.channelId;
++      dump("Latest event ID: " + requestId + "\n");
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.requestPostData.postData = { text: "(No request ID)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from);
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.requestPostData.postData = { text: "(No event or actor)" };
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    const client = this.commands.client.mainRoot;
++    dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++    let postDataText;
++    try {
++      const startTime = Date.now();
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++      ]);
++      const elapsed = Date.now() - startTime;
++      dump("PostData response after " + elapsed + "ms: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || "(No payload data)";
++      payload.requestPostData.postData = { text: postDataText };
++    } catch (e) {
++      dump("Error fetching postData: " + e.message + "\n");
++      postDataText = "(Error: " + e.message + ")";
++      payload.requestPostData.postData = { text: postDataText };
++      // No direct fetch yet—let’s test dummy headers first
++    }
++
++    try {
++      const headers = CurlUtils.getHeadersFromMultipartText(postDataText || "");
++      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++      // Add dummy headers to test override
++      const dummyHeaders = [
++        { name: "X-Dummy-Header", value: "Test-Value" },
++        { name: "X-Fake", value: "123" }
++      ];
++      const dummySize = dummyHeaders.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++      payload.requestPostData.uploadHeaders = { headers: dummyHeaders, headersSize: dummySize };
++      dump("Set dummy uploadHeaders: " + JSON.stringify(payload.requestPostData.uploadHeaders) + "\n");
++    } catch (e) {
++      dump("Error with CurlUtils: " + e + "\n");
++      payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Outer error: " + e + "\n");
++    payload.requestPostData.postData = { text: "(Fetch error)" };
++    payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*not bad
++ * async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  const payload = { postData: null, headers: null };
++
++  let requestId = requestPostData?.requestId || requestPostData?.from;
++  if (!requestId && this.owner?.selectedRequest) {
++    requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++  }
++
++  if (!requestId) {
++    dump("No requestId, falling back to latest event\n");
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      if (networkEvents.length > 0) {
++        requestId = networkEvents[networkEvents.length - 1].resourceId || networkEvents[networkEvents.length - 1].channelId;
++      }
++    } catch (e) {
++      dump("Error fetching events: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId found\n");
++    payload.postData = { text: null };
++    payload.headers = [];
++    payload.uploadHeaders = { headers: [], headersSize: 0 };
++    return payload;
++  }
++
++  try {
++    const event = (await this.commands.resourceCommand.getAllResources("network-event")).find(e => 
++      e.resourceId === requestId || e.channelId === requestId || e.actor === requestPostData?.from
++    );
++    if (!event || !event.actor) {
++      dump("No event or actor for requestId: " + requestId + "\n");
++      payload.postData = { text: null };
++      payload.headers = [];
++      payload.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
++    }
++
++    const actorId = event.actor;
++    dump("Using actor: " + actorId + "\n");
++    const client = this.commands.client.mainRoot;
++
++    let postDataText;
++    try {
++      dump("Fetching postData for actor: " + actorId + " or !!! getting stuck!\n");
++      const postDataResponse = await Promise.race([
++        client.request({ to: actorId, type: "getRequestPostData" }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2s")), 2000))
++      ]);
++      dump("!!!after, PostData response: " + JSON.stringify(postDataResponse) + "\n");
++      postDataText = postDataResponse?.postData?.text || null;
++      payload.postData = { text: postDataText };
++    } catch (e) {
++      dump("!!!after, PostData fetch failed: " + e.message + "\n");
++      payload.postData = { text: null };
++    }
++
++    try {
++      if (postDataText) {
++        const headers = CurlUtils.getHeadersFromMultipartText(postDataText);
++        const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++        dump("Headers from CurlUtils: " + JSON.stringify(headers) + "\n");
++        payload.headers = headers;
++        payload.uploadHeaders = { headers, headersSize };
++      } else {
++        dump("No postDataText for headers\n");
++        payload.headers = [];
++        payload.uploadHeaders = { headers: [], headersSize: 0 };
++      }
++    } catch (e) {
++      dump("CurlUtils error: " + e + "\n");
++      payload.headers = [];
++      payload.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++  } catch (e) {
++    dump("Fetch error: " + e + "\n");
++    payload.postData = { text: null };
++    payload.headers = [];
++    payload.uploadHeaders = { headers: [], headersSize: 0 };
++  }
++
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++  /* GOOD finally 
++  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        let actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          try {
++            dump("!!! before getting stuck");
++            const postDataResponse = await client.request({
++              to: actorId,
++              type: "getRequestPostData"
++            });
++            dump("PostData response: " + JSON.stringify(postDataResponse) + "\n");
++            if (postDataResponse && postDataResponse.postData && postDataResponse.postData.text) {
++              payload.postData = postDataResponse.postData;
++            } else {
++              dump("No postData text in response\n");
++            }
++          } catch (e) {
++            dump("Error fetching postData: " + e + "\n");
++          }
++
++          try {
++            const headersResponse = await client.request({
++              to: actorId,
++              type: "getRequestHeaders"
++            });
++            dump("Headers response: " + JSON.stringify(headersResponse) + "\n");
++            if (headersResponse && headersResponse.headers) {
++              payload.headers = headersResponse.headers;
++            } else {
++              dump("No headers in response\n");
++            }
++          } catch (e) {
++            dump("Error fetching headers: " + e + "\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++  /*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => 
++        e.resourceId === requestId || 
++        e.channelId === requestId || 
++        (requestPostData?.from && e.actor === requestPostData.from)
++      );
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + 
++            ", channelId: " + (event.channelId || "undefined") + 
++            ", actor: " + (event.actor || "no actor") + 
++            ", method: " + (event.method || "no method") + 
++            ", url: " + (event.url || "no url") + "\n");
++        let actorId = event.actor;
++        if (actorId) {
++          const client = this.commands.client.mainRoot;
++          const postDataResponse = await client.request({
++            to: actorId,
++            type: "getRequestPostData"
++          });
++          dump("PostData response: " + JSON.stringify(postDataResponse) + "\n");
++          if (postDataResponse && postDataResponse.postData && postDataResponse.postData.text) {
++            payload.postData = postDataResponse.postData;
++          } else {
++            dump("No postData text in response\n");
++          }
++
++          // Fetch headers
++          const headersResponse = await client.request({
++            to: actorId,
++            type: "getRequestHeaders"
++          });
++          dump("Headers response: " + JSON.stringify(headersResponse) + "\n");
++          if (headersResponse && headersResponse.headers) {
++            payload.headers = headersResponse.headers;
++          } else {
++            dump("No headers in response\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++
++/*  async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++      if (event) {
++        dump("Event resourceId: " + event.resourceId + ", channelId: " + (event.channelId || "undefined") + ", actor: " + (event.actor ? event.actor.actorID || event.actor : "no actor") + "\n");
++        let actorId = typeof event.actor === "string" ? event.actor : event.actor?.actorID;
++        if (actorId) {
++          // Use raw client request to fetch the actor front
++          const client = this.commands.client.mainRoot;
++          const response = await client.request({
++            to: actorId,
++            type: "getRequestPostData"
++          });
++          dump("Raw client response: " + JSON.stringify(response) + "\n");
++          if (response && response.postData) {
++            payload.postData = response.postData;
++          } else {
++            dump("No postData from raw client response\n");
++          }
++        } else {
++          dump("No actor ID found in event\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  } //GOOD2
++  */
++/*async fetchPostData(requestPostData) {
++    dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++    try {
++      dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++    } catch (e) {
++      dump("Error getting input keys: " + e + "\n");
++    }
++    dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    let requestId = requestPostData?.requestId;
++
++    if (!requestId && requestPostData?.from) {
++      requestId = requestPostData.from;
++      dump("Using from as requestId: " + requestId + "\n");
++    }
++
++    if (!requestId && this.owner) {
++      dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++      if (this.owner.selectedRequest) {
++        requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++        dump("Using selectedRequest id/channelId: " + requestId + "\n");
++      } else if (this.owner.currentRequest) {
++        requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++        dump("Using currentRequest id/channelId: " + requestId + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("No requestId available, falling back to latest network event\n");
++      try {
++        const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++        dump("Network events fetched: " + networkEvents.length + "\n");
++        if (networkEvents.length > 0) {
++          const latestEvent = networkEvents[networkEvents.length - 1];
++          requestId = latestEvent.resourceId || latestEvent.channelId;
++          dump("Using latest event id: " + requestId + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching latest event: " + e + "\n");
++      }
++    }
++
++    if (!requestId) {
++      dump("Still no requestId, returning empty payload\n");
++      return payload;
++    }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++      if (event) {
++        // Log specific fields to avoid cyclic error
++        dump("Event resourceId: " + event.resourceId + ", channelId: " + event.channelId + ", actor: " + (event.actor ? event.actor.actorID || event.actor : "no actor") + "\n");
++        let actorFront;
++        if (event.actor && typeof event.actor === "object" && event.actor.actorID) {
++          actorFront = await this.networkFront.getNetworkEvent(event.actor.actorID);
++        } else if (typeof event.actor === "string") {
++          actorFront = await this.networkFront.getNetworkEvent(event.actor);
++        } else {
++          // Fallback to requestId
++          actorFront = await this.networkFront.getNetworkEvent(requestId);
++        }
++
++        if (actorFront && typeof actorFront.getRequestPostData === "function") {
++          const postDataResponse = await actorFront.getRequestPostData();
++          dump("Actor front returned: " + JSON.stringify(postDataResponse) + "\n");
++          if (postDataResponse && postDataResponse.postData) {
++            payload.postData = postDataResponse.postData;
++          } else {
++            dump("No postData from actor front\n");
++          }
++        } else {
++          dump("No valid actor front fetched or no getRequestPostData method\n");
++        }
++      } else {
++        dump("No matching network event for requestId: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching from resourceCommand: " + e + "\n");
++    }
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload;
++  }*/
++/*  async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  let requestId = requestPostData?.requestId;
++
++  if (!requestId && requestPostData?.from) {
++    requestId = requestPostData.from;
++    dump("Using from as requestId: " + requestId + "\n");
++  }
++
++  if (!requestId && this.owner) {
++    dump("Owner keys: " + JSON.stringify(Object.keys(this.owner)) + "\n");
++    if (this.owner.selectedRequest) {
++      requestId = this.owner.selectedRequest.id || this.owner.selectedRequest.channelId;
++      dump("Using selectedRequest id/channelId: " + requestId + "\n");
++    } else if (this.owner.currentRequest) {
++      requestId = this.owner.currentRequest.id || this.owner.currentRequest.channelId;
++      dump("Using currentRequest id/channelId: " + requestId + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("No requestId available, falling back to latest network event\n");
++    try {
++//      const networkEvents = await this.commands.resourceCommand.getAllResources(
++//        this.commands.resourceCommand.RESOURCE_TYPES.NETWORK_EVENT
++//      );
++      //const networkEvents = await this.commands.resourceCommand.getAllResources(
++      //  ResourceCommand.TYPES.NETWORK_EVENT // Changed to use imported ResourceCommand.TYPES
++      //);
++      //const networkEvents = await this.commands.resourceCommand.getAllResources("NETWORK_EVENT"); // Hardcoded type
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event"); // Hardcoded type
++      dump("Network events fetched: " + networkEvents.length + "\n");
++      if (networkEvents.length > 0) {
++        const latestEvent = networkEvents[networkEvents.length - 1];
++        requestId = latestEvent.resourceId || latestEvent.channelId;
++        dump("Using latest event id: " + requestId + "\n");
++      }
++    } catch (e) {
++      dump("Error fetching latest event: " + e + "\n");
++    }
++  }
++
++  if (!requestId) {
++    dump("Still no requestId, returning empty payload\n");
++    return payload;
++  }
++
++  try {
++//    const networkEvents = await this.commands.resourceCommand.getAllResources(
++//      this.commands.resourceCommand.RESOURCE_TYPES.NETWORK_EVENT
++//    );
++    //const networkEvents = await this.commands.resourceCommand.getAllResources(
++    //  ResourceCommand.TYPES.NETWORK_EVENT // Changed to use imported ResourceCommand.TYPES
++    //);
++    //const networkEvents = await this.commands.resourceCommand.getAllResources("NETWORK_EVENT"); // Hardcoded type
++    const networkEvents = await this.commands.resourceCommand.getAllResources("network-event"); // Hardcoded type
++    const event = networkEvents.find(e => e.resourceId === requestId || e.channelId === requestId);
++    if (event && event.actor) {
++      const postDataResponse = await event.actor.getRequestPostData();
++      dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++      if (postDataResponse && postDataResponse.postData) {
++        payload.postData = postDataResponse.postData;
++      } else {
++        dump("No postData in response\n");
++      }
++    } else {
++      dump("No matching network event for requestId: " + requestId + "\n");
++    }
++  } catch (e) {
++    dump("Error fetching from resourceCommand: " + e + "\n");
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*  async fetchPostData(requestPostData) {
++    console.log("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined"));
++    let requestId = requestPostData?.requestId;
++
++    // Fallback to selectedRequestId if requestPostData is undefined
++    if (!requestId && this.owner) {
++      requestId = this.owner.selectedRequestId;
++      console.log("Using selectedRequestId: " + requestId);
++    }
++
++    if (!requestId) {
++      console.log("No requestId available");
++      return {};
++    }
++
++    try {
++      const actor = await this.networkFront.getNetworkEvent(requestId);
++      console.log("Got actor: " + !!actor);
++      if (actor) {
++        const postDataResponse = await actor.getRequestPostData();
++        console.log("Actor returned: " + JSON.stringify(postDataResponse));
++        return { postData: postDataResponse.postData };
++      } else {
++        console.log("No actor found for requestId: " + requestId);
++        return {};
++      }
++    } catch (e) {
++      console.error("Error fetching from actor: " + e);
++      return {};
++    }
++  }*/
++/*async fetchPostData(requestPostData) {
++  dump("fetchPostData called with input: " + (requestPostData ? "[object Object]" : "undefined") + "\n");
++  try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++  const payload = {};
++  if (!requestPostData || !requestPostData.postData) {
++    dump("No postData, fetching from actor\n");
++    try {
++      const requestId = requestPostData?.requestId;
++      if (!requestId) {
++        dump("No requestId, trying owner\n");
++        if (this.owner && this.owner.getRequestPostData) {
++          const postDataResponse = await this.owner.getRequestPostData();
++          dump("Owner returned: " + JSON.stringify(postDataResponse) + "\n");
++          payload.postData = postDataResponse?.postData;
++        } else {
++          dump("No owner.getRequestPostData available\n");
++        }
++      } else {
++        const actor = await this.networkFront.getNetworkEvent(requestId);
++        dump("Got actor: " + !!actor + "\n");
++        if (actor) {
++          const postDataResponse = await actor.getRequestPostData();
++          dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++          payload.postData = postDataResponse.postData;
++        } else {
++          dump("No actor found for requestId: " + requestId + "\n");
++        }
++      }
++    } catch (e) {
++      dump("Error fetching from actor: " + e + "\n");
++    }
++  } else {
++    payload.postData = requestPostData.postData;
++  }
++  dump("Returning payload: " + JSON.stringify(payload) + "\n");
++  return payload;
++}*/
++/*  async fetchPostData(requestPostData) {
++      dump("fetchPostData called with input(1of3): " + requestPostData + "\n");
++    dump("fetchPostData input keys: " + (requestPostData ? Object.keys(requestPostData) : "undefined") + "\n");
++      //dump("fetchPostData called with input(2of3): " + requestPostData + "\n");
++    //console.log("fetchPostData called with input:", requestPostData);
++      //dump("fetchPostData called with input(3of3): " + requestPostData + "\n");
++      try {
++    dump("fetchPostData input keys: " + (requestPostData ? JSON.stringify(Object.keys(requestPostData)) : "undefined") + "\n");
++  } catch (e) {
++    dump("Error getting input keys: " + e + "\n");
++  }
++  dump("fetchPostData proceeding with payload\n");
++    const payload = {};
++    if (!requestPostData || !requestPostData.postData) {
++  dump("No postData, fetching from actor\n");
++  try {
++    const requestId = requestPostData?.requestId || "unknown";
++    //TODO:
++    //const actor = await this.actorFront.getNetworkEvent(requestId);
++    //const postDataResponse = await actor.getRequestPostData();
++    const postDataResponse = await this.actorFront.getRequestPostData(requestId);
++    dump("Actor returned: " + JSON.stringify(postDataResponse) + "\n");
++    requestPostData = postDataResponse;
++  } catch (e) {
++    dump("Error fetching from actor: " + e + "\n");
++  }
++}
++//      if (!requestPostData || !requestPostData.postData) {
++//    dump("No postData, fetching from actor\n");
++//    requestPostData = await this.actorFront.getRequestPostData(requestPostData?.requestId || "unknown");
++//    dump("Actor returned: " + JSON.stringify(requestPostData) + "\n");
++//  }
++    if (requestPostData?.postData) {
++      const { text } = requestPostData.postData;
++      const postData = await this.getLongString(text);
++      //console.log("PostData (blocked or not):", postData); // Debug
++      dump("PostData (blocked or not):" + postData + "\n"); // Debug
++      const headers = CurlUtils.getHeadersFromMultipartText(postData);
++
++      // Calculate total header size and don't forget to include
++      // two new-line characters at the end.
++      const headersSize = headers.reduce((acc, { name, value }) => {
++        return acc + name.length + value.length + 2;
++      }, 0);
++
++      requestPostData.postData.text = postData;
++      payload.requestPostData = {
++        ...requestPostData,
++        uploadHeaders: { headers, headersSize },
++      };
++    } else {
++      //console.log("No postData received for request:", requestPostData); // Debug blocked case
++      dump("No postData received for request:" + requestPostData + "\n"); // Debug blocked case
++      // Ensure requestPostData exists
++      //if (!requestPostData) {
++      //  requestPostData = {};
++      //}
++      //requestPostData.postData = { text: "(Blocked payload unavailable)" };
++    }
++    return payload;
++  }*/
++
+   async fetchRequestCookies(requestCookies) {
+     const payload = {};
+     if (requestCookies) {
+@@ -673,10 +3860,13 @@ class FirefoxDataProvider {
+    * @param {object} response the message received from the server.
+    */
+   async onRequestHeaders(response) {
++    dump("!! in onRequestHeaders\n");
+     const payload = await this.updateRequest(response.from, {
+       requestHeaders: response,
+     });
++    dump("!! out1of2 onRequestHeaders\n");
+     this.emitForTests(TEST_EVENTS.RECEIVED_REQUEST_HEADERS, response);
++    dump("!! out2of2 onRequestHeaders\n");
+     return payload.requestHeaders;
+   }
+ 
+diff --git a/devtools/client/netmonitor/src/utils/request-utils.js b/devtools/client/netmonitor/src/utils/request-utils.js
+index baa3c28a29..77afb5a647 100644
+--- a/devtools/client/netmonitor/src/utils/request-utils.js
++++ b/devtools/client/netmonitor/src/utils/request-utils.js
+@@ -56,7 +56,9 @@ async function getFormDataSections(
+     ? contentTypeHeader.value
+     : "";
+ 
++  dump("!!! helooo\n");
+   const contentType = await getLongString(contentTypeLongString);
++  dump("!!!2 "+contentType+"\n");
+ 
+   if (contentType && contentType.includes("x-www-form-urlencoded")) {
+     const postDataLongString = postData.postData.text;
+@@ -563,12 +565,18 @@ async function updateFormDataSections(props) {
+     requestPostDataAvailable,
+   } = request;
+ 
++  dump("!!!ok1 before headers check\n");
+   if (requestHeadersAvailable && !requestHeaders) {
++    dump("!!!ok2 requesting headers\n");
+     requestHeaders = await connector.requestData(id, "requestHeaders");
++    dump("!!!ok2_2 after requesting headers\n");
+   }
+ 
++  dump("!!!ok3 before checking requestPostData\n");
+   if (requestPostDataAvailable && !requestPostData) {
++    dump("!!!ok4 before requesting requestPostData\n");
+     requestPostData = await connector.requestData(id, "requestPostData");
++    dump("!!!ok5 after requesting requestPostData\n");
+   }
+ 
+   if (
+diff --git a/devtools/server/actors/network-monitor/network-event-actor.js b/devtools/server/actors/network-monitor/network-event-actor.js
+index 9e5a16ba46..47dd5110e7 100644
+--- a/devtools/server/actors/network-monitor/network-event-actor.js
++++ b/devtools/server/actors/network-monitor/network-event-actor.js
+@@ -77,6 +77,50 @@ class NetworkEventActor extends Actor {
+   ) {
+     super(conn, networkEventSpec);
+ 
++    this._channel = channel;
++    this._postDataText = null;
++//    if (channel) {
++//      channel.getPostDataText().then(text => {
++//        this._postDataText = text;
++//        console.log("Stored postDataText: " + text);
++//      }).catch(e => console.log("Error getting postDataText: " + e));
++//    }
++//    if (channel) {
++//      // Properly handle getPostDataText as a Promise
++//      try {
++//        const postDataTextPromise = channel.getPostDataText();
++//        if (postDataTextPromise && typeof postDataTextPromise.then === "function") {
++//          postDataTextPromise
++//            .then(text => {
++//              this._postDataText = text;
++//              dump("Stored postDataText: " + text + "\n");
++//            })
++//            .catch(e => 
++//              dump("Error getting postDataText: " + e+"\n")
++//            );
++//        } else {
++//          dump("getPostDataText did not return a Promise\n");
++//        }
++//      } catch (e) {
++//        dump("Initial getPostDataText call failed: " + e+"\n");
++//      }
++//    }
++    dump("NetworkEventActor constructor, channel: " + (channel ? "present" : "null") + "\n");
++    if (channel) {
++      try {
++        dump("Attempting getPostDataText\n");
++        let text = {};
++        channel.getPostDataText(text); // Out-param style
++        dump("getPostDataText called, text: " + (text.value || "empty") + "\n");
++        this._postDataText = text.value || null;
++        dump("Stored postDataText: " + this._postDataText + "\n");
++      } catch (e) {
++        dump("Initial getPostDataText call failed: " + e + "\n");
++      }
++    } else {
++      dump("No channel in constructor\n");
++    }
++
+     this._sessionContext = sessionContext;
+     this._onNetworkEventUpdate = onNetworkEventUpdate;
+     this._onNetworkEventDestroy = onNetworkEventDestroy;
+@@ -315,6 +359,57 @@ class NetworkEventActor extends Actor {
+    * @return object
+    *         The response packet - network POST data.
+    */
++/*  getRequestPostData() {
++  //dump("getRequestPostData called\n");
++    dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n");
++    if (!this._channel) {
++      //dump("getRequestPostData called with No channel available");
++       if (this._postDataText) {
++        return { postData: { text: this._postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++      }
++      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++    }
++  let postDataText = null;
++  if (this._channel) {
++    dump("Channel available: " + !!this._channel + "\n");
++    try {
++      const channel = this._channel.QueryInterface(Ci.nsIHttpChannel);
++      dump("Channel QI to nsIHttpChannel: " + !!channel + "\n");
++      const postDataObj = {};
++      channel.GetPostDataText(postDataObj);
++      dump("GetPostDataText result: " + postDataObj.value + "\n");
++      if (postDataObj.value) {
++        postDataText = postDataObj.value;
++        postDataText = this._createLongStringActor(postDataText);
++        dump("Long string created: " + postDataText + "\n");
++      } else {
++        dump("No mPostDataText found\n");
++      }
++    } catch (e) {
++      dump("Error in GetPostDataText: " + e + "\n");
++    }
++  } else {
++    dump("No channel available\n");
++  }
++  const response = {
++    postData: {
++      size: postDataText ? postDataText.length : 0,
++      text: postDataText,
++    },
++    postDataDiscarded: this._discardRequestBody || false,
++  };
++  dump("Returning postData: " + JSON.stringify(response) + "\n");
++  return response;
++} //GOODish
++*/
++   
++  /**
++   * The "getRequestPostData" packet type handler.
++   *
++   * @return object
++   *         The response packet - network POST data.
++   */
++  /*ORIGINAL:
+   getRequestPostData() {
+     let postDataText;
+     if (this._request.postData.text) {
+@@ -330,6 +425,233 @@ class NetworkEventActor extends Actor {
+       postDataDiscarded: this._discardRequestBody,
+     };
+   }
++  */
++/* prevgood:  getRequestPostData() {
++    dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n");
++    let postDataText;
++    if (this._request.postData.text) {
++      dump("!!!get some original\n");
++      // Create a long string actor for the postData text if needed.
++      postDataText = this._createLongStringActor(this._request.postData.text);
++      return {
++        postData: {
++          size: this._request.postData.size,
++          text: postDataText,
++        },
++        postDataDiscarded: this._discardRequestBody,
++      };
++    }
++    dump("!!!carry on to modded\n");
++    if (this._postDataText) {
++      dump("Returning stored postDataText\n");
++      postDataText = this._createLongStringActor(this._postDataText);
++      return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++      //return { postData: { text: this._postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++    }
++    dump("No stored postDataText, checking channel\n");
++    if (!this._channel) {
++      dump("No channel available\n");
++      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++    }
++    // Fallback to live channel
++    try {
++      let text = {};
++      this._channel.getPostDataText(text);
++      dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++      if (text.value) {
++        return { postData: { text: text.value, size: text.value.length }, postDataDiscarded: false };
++      }
++    } catch (e) {
++      dump("Live channel getPostDataText failed: " + e + "\n");
++    }
++    dump("Falling back to empty payload\n");
++    return { postData: { size: 0, text: null }, postDataDiscarded: false };
++  }*/
++/*  getRequestPostData() {
++  dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n"); // Unchanged: Log call
++  let postDataText; // Unchanged: Declare postDataText
++  if (this._request.postData.text) { // Unchanged: Check original postData
++    // Changed: Restored LongStringActor from original
++    postDataText = this._createLongStringActor(this._request.postData.text); // Changed: Use LongStringActor like original
++    dump("Returning original postData as LongStringActor\n"); // Changed: Log as LongStringActor
++    return { // Changed: Match original structure
++      postData: { // Unchanged: postData object
++        size: this._request.postData.size, // Changed: Use original size
++        text: postDataText, // Changed: Use LongStringActor
++      },
++      postDataDiscarded: this._discardRequestBody, // Changed: Use original discard flag
++    };
++  }
++  // Changed: Your custom logic below
++  if (this._postDataText) { // Unchanged: Check stored postDataText
++    dump("Returning stored postDataText\n"); // Unchanged: Log stored
++    postDataText = this._createLongStringActor(this._postDataText); // Changed: Use LongStringActor for consistency
++    return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false }; // Changed: Add LongStringActor, keep your size
++  }
++  dump("No stored postDataText, checking channel\n"); // Unchanged: Log channel check
++  if (!this._channel) { // Unchanged: No channel check
++    dump("No channel available\n"); // Unchanged: Log no channel
++    return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Unchanged: Empty response
++  }
++  try { // Unchanged: Try live channel
++    let text = {}; // Unchanged: Out-param object
++    this._channel.getPostDataText(text); // Unchanged: Get live text
++    dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n"); // Unchanged: Log live text
++    if (text.value) { // Unchanged: Check live text
++      postDataText = this._createLongStringActor(text.value); // Changed: Use LongStringActor for live data
++      return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false }; // Changed: Add LongStringActor, keep your size
++    }
++  } catch (e) { // Unchanged: Catch error
++    dump("Live channel getPostDataText failed: " + e + "\n"); // Unchanged: Log error
++  }
++  dump("Falling back to empty payload\n"); // Unchanged: Log fallback
++  return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Unchanged: Empty response
++}*/
++  getRequestPostData() {
++  dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n");
++  let postDataText;
++  if (this._request.postData.text) {
++    postDataText = this._createLongStringActor(this._request.postData.text); // Use LongStringActor like original
++    dump("Returning original postData as LongStringActor\n");
++    return {
++      postData: { text: postDataText, size: this._request.postData.size }, // Match original structure
++      postDataDiscarded: this._discardRequestBody,
++    };
++  }
++  if (this._postDataText) {
++    postDataText = this._createLongStringActor(this._postDataText); // Use LongStringActor for stored data
++    dump("Returning stored postDataText as LongStringActor\n");
++    return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++  }
++  dump("No stored postDataText, checking channel\n");
++  if (!this._channel) {
++    dump("No channel available\n");
++    return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Null like original intent
++  }
++  try {
++    let text = {};
++    this._channel.getPostDataText(text);
++    dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++    if (text.value) {
++      postDataText = this._createLongStringActor(text.value); // Use LongStringActor for live data
++      dump("Returning live postData as LongStringActor\n");
++      return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false };
++    }
++  } catch (e) {
++    dump("Live channel getPostDataText failed: " + e + "\n");
++  }
++  dump("Falling back to empty payload\n");
++  return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Null like original intent
++}
++/*  getRequestPostData() {
++  dump("getRequestPostData called\n");
++  let postDataText = null;
++  if (this.channel) {
++    try {
++      const channel = this.channel.QueryInterface(Ci.nsIHttpChannel);
++      const postDataObj = {};
++      channel.GetPostDataText(postDataObj);
++      dump("GetPostDataText result: " + postDataObj.value + "\n");
++      if (postDataObj.value) {
++        postDataText = postDataObj.value;
++        postDataText = this._createLongStringActor(postDataText);
++        dump("Long string created: " + postDataText + "\n");
++      } else {
++        dump("No mPostDataText found\n");
++      }
++    } catch (e) {
++      dump("Error in GetPostDataText: " + e + "\n");
++    }
++  }
++  const response = {
++    postData: {
++      size: postDataText ? postDataText.length : 0,
++      text: postDataText,
++    },
++    postDataDiscarded: this._discardRequestBody || false,
++  };
++  dump("Returning postData: " + JSON.stringify(response) + "\n");
++  return response;
++}*/
++/*  getRequestPostData() {
++    console.log("getRequestPostData called");
++    let postDataText = null;
++    if (this.channel) {
++      try {
++        const channel = this.channel.QueryInterface(Ci.nsIHttpChannel);
++        const postDataObj = {};
++        channel.GetPostDataText(postDataObj);
++        console.log("GetPostDataText result: " + postDataObj.value);
++        if (postDataObj.value) {
++          postDataText = postDataObj.value;
++          // Handle large strings if necessary
++          postDataText = this._createLongStringActor(postDataText);
++        } else {
++          console.log("No mPostDataText found");
++        }
++      } catch (e) {
++        console.error("Error in GetPostDataText: " + e);
++      }
++    }
++    return {
++      postData: {
++        size: postDataText ? postDataText.length : 0,
++        text: postDataText,
++      },
++      postDataDiscarded: this._discardRequestBody || false,
++    };
++  }
++  */
++/*  getRequestPostData() {
++    dump("!!! foooo\n");
++    dump("!!! getRequestPostData called, channel: " + !!this.channel + "\n");
++    Components.utils.reportError("getRequestPostData called"); // ADDED
++    console.log("getRequestPostData called, channel:", !!this.channel);
++    let postDataText;
++//    if (this._request.postData.text) {
++//      // Create a long string actor for the postData text if needed.
++//      postDataText = this._createLongStringActor(this._request.postData.text);
++//    }// ADDED: Fallback to channel if available
++//  else if (this.channel) {
++//    this.channel.QueryInterface(Ci.nsIHttpChannel).GetPostDataText(postDataText);
++//    if (postDataText) {
++//      postDataText = this._createLongStringActor(postDataText);
++//    }
++//  }
++
++//    if (this.channel) { // Prioritize our C++ capture
++//      this.channel.QueryInterface(Ci.nsIHttpChannel).GetPostDataText(postDataText);
++//      if (postDataText) {
++//        postDataText = this._createLongStringActor(postDataText);
++//      }
++//    }
++    if (this.channel) {
++      try {
++        let channel = this.channel.QueryInterface(Ci.nsIHttpChannel);
++        channel.GetPostDataText(postDataText);
++        console.log("GetPostDataText raw result:", postDataText);
++        if (postDataText) {
++          postDataText = this._createLongStringActor(postDataText);
++          console.log("Long string created:", postDataText);
++        }
++      } catch (e) {
++        console.log("GetPostDataText error:", e);
++      }
++    }
++    if (!postDataText && this._request.postData.text) { // Fallback
++      postDataText = this._createLongStringActor(this._request.postData.text);
++    }
++    console.log("getRequestPostData returning:", { text: postDataText, size: postDataText ? postDataText.length : 0 }); // Debug
++
++    return {
++      postData: {
++        // MODIFIED: Use text length if size is missing
++        size: this._request.postData.size || (postDataText ? postDataText.length : 0),
++        text: postDataText,
++      },
++      postDataDiscarded: this._discardRequestBody,
++    };
++  }*/
+ 
+   /**
+    * The "getSecurityInfo" packet type handler.
+diff --git a/netwerk/protocol/http/HttpChannelChild.cpp b/netwerk/protocol/http/HttpChannelChild.cpp
+index 5a38d5a035..d691d96f91 100644
+--- a/netwerk/protocol/http/HttpChannelChild.cpp
++++ b/netwerk/protocol/http/HttpChannelChild.cpp
+@@ -68,6 +68,8 @@
+ #include "nsCORSListenerProxy.h"
+ #include "nsIOService.h"
+ 
++#include "nsString.h"
++
+ #include <functional>
+ 
+ using namespace mozilla::dom;
+@@ -155,6 +157,17 @@ HttpChannelChild::~HttpChannelChild() {
+   ReleaseMainThreadOnlyReferences();
+ }
+ 
++//NS_IMETHODIMP
++//HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = NS_LITERAL_STRING("");
++//  return NS_OK;
++//}
++NS_IMETHODIMP
++HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
+   if (NS_IsMainThread()) {
+     // Already on main thread, let dtor to
+diff --git a/netwerk/protocol/http/HttpChannelChild.h b/netwerk/protocol/http/HttpChannelChild.h
+index c952065b91..065359bd19 100644
+--- a/netwerk/protocol/http/HttpChannelChild.h
++++ b/netwerk/protocol/http/HttpChannelChild.h
+@@ -75,6 +75,7 @@ class HttpChannelChild final : public PHttpChannelChild,
+ 
+   HttpChannelChild();
+ 
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // Methods HttpBaseChannel didn't implement for us or that we override.
+   //
+   // nsIRequest
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.cpp b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+index fbf4bdf1e2..b486b660fe 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.cpp
++++ b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+@@ -21,6 +21,8 @@
+ #include "nsQueryObject.h"
+ #include "mozilla/Logging.h"
+ 
++#include "nsString.h" // For nsAString
++
+ namespace mozilla::net {
+ 
+ mozilla::LazyLogModule gInterceptedLog("Intercepted");
+@@ -69,6 +71,12 @@ void InterceptedHttpChannel::ReleaseListeners() {
+   MOZ_DIAGNOSTIC_ASSERT(!LoadIsPending());
+ }
+ 
++NS_IMETHODIMP
++InterceptedHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ nsresult InterceptedHttpChannel::SetupReplacementChannel(
+     nsIURI* aURI, nsIChannel* aChannel, bool aPreserveMethod,
+     uint32_t aRedirectFlags) {
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.h b/netwerk/protocol/http/InterceptedHttpChannel.h
+index 704404c9f0..8d9bcdfd83 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.h
++++ b/netwerk/protocol/http/InterceptedHttpChannel.h
+@@ -221,6 +221,7 @@ class InterceptedHttpChannel final
+   TimeStamp mServiceWorkerLaunchEnd;
+ 
+  public:
++    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   static already_AddRefed<InterceptedHttpChannel> CreateForInterception(
+       PRTime aCreationTime, const TimeStamp& aCreationTimestamp,
+       const TimeStamp& aAsyncOpenTimestamp);
+diff --git a/netwerk/protocol/http/NullHttpChannel.cpp b/netwerk/protocol/http/NullHttpChannel.cpp
+index 1038ba82df..147da42fb9 100644
+--- a/netwerk/protocol/http/NullHttpChannel.cpp
++++ b/netwerk/protocol/http/NullHttpChannel.cpp
+@@ -7,6 +7,7 @@
+ #include "nsContentSecurityManager.h"
+ #include "nsIScriptSecurityManager.h"
+ #include "nsIStreamListener.h"
++#include "nsString.h"
+ 
+ namespace mozilla {
+ namespace net {
+@@ -57,6 +58,12 @@ NullHttpChannel::GetChannelId(uint64_t* aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::NullHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP
+ NullHttpChannel::SetChannelId(uint64_t aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+diff --git a/netwerk/protocol/http/NullHttpChannel.h b/netwerk/protocol/http/NullHttpChannel.h
+index 478d13e0a2..8689951ee0 100644
+--- a/netwerk/protocol/http/NullHttpChannel.h
++++ b/netwerk/protocol/http/NullHttpChannel.h
+@@ -56,6 +56,8 @@ class NullHttpChannel final : public nsINullChannel,
+   nsCString mTimingAllowOriginHeader;
+   bool mAllRedirectsSameOrigin{false};
+   bool mAllRedirectsPassTimingAllowCheck{false};
++// public:
++//    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+ };
+ 
+ }  // namespace net
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.cpp b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+index 8b7059426c..7a47772b86 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.cpp
++++ b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+@@ -13,6 +13,7 @@
+ #include "BinaryHttpRequest.h"
+ #include "nsIHttpHeaderVisitor.h"
+ #include "nsStringStream.h"
++#include "nsString.h"
+ 
+ namespace mozilla::net {
+ 
+@@ -35,6 +36,12 @@ ObliviousHttpChannel::ObliviousHttpChannel(
+   MOZ_ASSERT(mInnerChannelTimed);
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::ObliviousHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ ObliviousHttpChannel::~ObliviousHttpChannel() {
+   LOG(("ObliviousHttpChannel dtor [this=%p]", this));
+ }
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.h b/netwerk/protocol/http/ObliviousHttpChannel.h
+index 9dc9c9f689..df1315e492 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.h
++++ b/netwerk/protocol/http/ObliviousHttpChannel.h
+@@ -34,6 +34,7 @@ class ObliviousHttpChannel final : public nsIObliviousHttpChannel,
+   NS_DECL_NSISTREAMLISTENER
+   NS_DECL_NSIUPLOADCHANNEL2
+ 
++//     NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   ObliviousHttpChannel(nsIURI* targetURI,
+                        const nsTArray<uint8_t>& encodedConfig,
+                        nsIHttpChannel* innerChannel);
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 58094fa024..0d623390f0 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -30,6 +30,8 @@
+ #include "TRR.h"
+ #include "TRRService.h"
+ 
++#include "nsString.h"
++
+ namespace mozilla::net {
+ 
+ NS_IMPL_ADDREF(TRRServiceChannel)
+@@ -50,6 +52,18 @@ bool TRRServiceChannel::DispatchRelease() {
+   return true;
+ }
+ 
++//NS_IMETHODIMP
++//TRRServiceChannel::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = NS_LITERAL_STRING("");
++//  return NS_OK;
++//}
++
++NS_IMETHODIMP
++TRRServiceChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP_(MozExternalRefCountType)
+ TRRServiceChannel::Release() {
+   nsrefcnt count = mRefCnt - 1;
+diff --git a/netwerk/protocol/http/TRRServiceChannel.h b/netwerk/protocol/http/TRRServiceChannel.h
+index d9365a592a..5b7e6b4911 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.h
++++ b/netwerk/protocol/http/TRRServiceChannel.h
+@@ -47,6 +47,7 @@ class TRRServiceChannel : public HttpBaseChannel,
+   NS_DECL_NSIPROTOCOLPROXYCALLBACK
+   NS_DECLARE_STATIC_IID_ACCESSOR(NS_TRRSERVICECHANNEL_IID)
+ 
++    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // nsIRequest
+   NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
+   NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+index e4479400a4..02a6c529ca 100644
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -144,6 +144,8 @@
+ #  include "mozilla/StaticPrefs_fuzzing.h"
+ #endif
+ 
++#include "nsStreamUtils.h" // For NS_ReadInputStreamToString
++
+ namespace mozilla {
+ 
+ using namespace dom;
+@@ -6680,6 +6682,107 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+     return NS_OK;
+   }
+ 
++  // Add payload capture here
++  printf("!!!! in nsHttpChannel::AsyncOpen before payload capture\n");
++/*  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoString body;
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = ReadFromInputStream(clonedStream, body); // Assume this utility function exists
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = ReadFromInputStream(mUploadStream, body);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++      }
++    }
++  }*/
++/*  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoString body;
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++      }
++    }
++  }*/
++  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoCString body; // Change to nsAutoCString for UTF-8
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body; // Already nsCString
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body;
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++      }
++    }
++  }
++//  nsAutoCString method;
++//  mRequestHead.Method(method);
++//  if (mUploadStream && method.EqualsLiteral("POST")) {
++//    nsCString body;
++//    nsCOMPtr<nsIInputStream> stream = mUploadStream;
++//    uint64_t available;
++//    if (NS_SUCCEEDED(stream->Available(&available)) && available > 0) {
++//      char buffer[1024];
++//      uint32_t read;
++//      while (NS_SUCCEEDED(stream->Read(buffer, sizeof(buffer) - 1, &read)) && read > 0) {
++//        buffer[read] = '\0';
++//        body.Append(buffer);
++//      }
++//      LOG(("Captured POST payload: %s", body.get()));
++//      printf("Captured POST payload: %s\n", body.get()); // Debug to stdout
++//      mPostDataText = body; // Add to nsHttpChannel.h
++//      printf("mPostDataText set to: %s\n", mPostDataText.get());
++//    }
++//  }
++
+   MOZ_ASSERT(NS_IsMainThread());
+ 
+   if (!gHttpHandler->Active()) {
+@@ -6771,6 +6874,18 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   return NS_OK;
+ }
+ 
++//NS_IMETHODIMP
++//nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = mPostDataText;
++//  return NS_OK;
++//}
++NS_IMETHODIMP
++nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  printf("GetPostDataText called, mPostDataText: %s\n", mPostDataText.get());
++  aPostDataText = NS_ConvertUTF8toUTF16(mPostDataText);
++  return NS_OK;
++}
++
+ void nsHttpChannel::AsyncOpenFinal(TimeStamp aTimeStamp) {
+   // We save this timestamp from outside of the if block in case we enable the
+   // profiler after AsyncOpen().
+diff --git a/netwerk/protocol/http/nsHttpChannel.h b/netwerk/protocol/http/nsHttpChannel.h
+index cb8b8b7406..a187bb1237 100644
+--- a/netwerk/protocol/http/nsHttpChannel.h
++++ b/netwerk/protocol/http/nsHttpChannel.h
+@@ -102,6 +102,9 @@ class nsHttpChannel final : public HttpBaseChannel,
+       nsACString& aServerResponseHeader) override;
+   NS_IMETHOD GetProxyChallenges(nsACString& aChallenges) override;
+   NS_IMETHOD GetWWWChallenges(nsACString& aChallenges) override;
++  
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   NS_IMETHOD SetProxyCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD SetWWWCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD OnAuthAvailable() override;
+@@ -849,6 +852,7 @@ class nsHttpChannel final : public HttpBaseChannel,
+   Maybe<nsCOMPtr<nsIDNSHTTPSSVCRecord>> mHTTPSSVCRecord;
+ 
+  protected:
++    nsCString mPostDataText; // ADDED: Store POST payload
+   virtual void DoNotifyListenerCleanup() override;
+ 
+   // Override ReleaseListeners() because mChannelClassifier only exists
+diff --git a/netwerk/protocol/http/nsIHttpChannel.idl b/netwerk/protocol/http/nsIHttpChannel.idl
+index a8372ba080..ff151bd5b5 100644
+--- a/netwerk/protocol/http/nsIHttpChannel.idl
++++ b/netwerk/protocol/http/nsIHttpChannel.idl
+@@ -24,6 +24,7 @@ native UniqueProfileChunkedBuffer(mozilla::UniquePtr<mozilla::ProfileChunkedBuff
+ [builtinclass, scriptable, uuid(c5a4a073-4539-49c7-a3f2-cec3f0619c6c)]
+ interface nsIHttpChannel : nsIIdentChannel
+ {
++  void getPostDataText(out AString aPostDataText);
+     /**************************************************************************
+      * REQUEST CONFIGURATION
+      *
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+index d38cc43586..29e4765597 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+@@ -19,6 +19,8 @@
+ #include "nsNetUtil.h"
+ #include "nsServiceManagerUtils.h"
+ 
++#include "nsString.h"
++
+ NS_IMPL_ADDREF(nsViewSourceChannel)
+ NS_IMPL_RELEASE(nsViewSourceChannel)
+ /*
+@@ -45,6 +47,12 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIViewSourceChannel)
+ NS_INTERFACE_MAP_END
+ 
++NS_IMETHODIMP
++nsViewSourceChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ static nsresult WillUseExternalProtocolHandler(nsIIOService* aIOService,
+                                                const char* aScheme) {
+   nsCOMPtr<nsIProtocolHandler> handler;
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.h b/netwerk/protocol/viewsource/nsViewSourceChannel.h
+index 87c490f6b7..3ba43b499a 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.h
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.h
+@@ -48,6 +48,8 @@ class nsViewSourceChannel final : public nsIViewSourceChannel,
+   NS_FORWARD_SAFE_NSIFORMPOSTACTIONCHANNEL(mPostChannel)
+   NS_FORWARD_SAFE_NSIHTTPCHANNELINTERNAL(mHttpChannelInternal)
+ 
++//  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   // nsViewSourceChannel methods:
+   nsViewSourceChannel() = default;
+ 

@@ -1,0 +1,9 @@
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x319a55f) [0x739f4279a55f]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x3505acb) [0x739f42b05acb]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x35160c6) [0x739f42b160c6]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x35168fc) [0x739f42b168fc]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x3537ea4) [0x739f42b37ea4]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x348d00f) [0x739f42a8d00f]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x3515e04) [0x739f42b15e04]
+/home/user/SOURCE/firefox-developer-edition/src/firefox-137.0/obj/dist/bin/libxul.so(+0x35db402) [0x739f42bdb402]
+

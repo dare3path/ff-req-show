@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+
+#XXX: this is used to recompile any modifs in ./src/firefox-137.0/
+time makepkg --noextract --nocheck --skippgpcheck --noarchive
+

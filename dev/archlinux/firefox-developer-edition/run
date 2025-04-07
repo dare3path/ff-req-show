@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+
+#XXX: this runs the compiled by ./go executable from ./src/firefox-137.0/ folder
+
+#export MOZ_LOG="NetworkMonitor:5"
+export MOZ_LOG="NetworkMonitor:5,timestamp" #unused, must enable one of the 'dump'-named keys from about:config
+
+#firefoxgroup is a group that's allowed internet access through the firewall (not actually needed)
+if getent group firefoxgroup >& /dev/null ; then
+  #time /usr/bin/sg firefoxgroup -c 'echo "$MOZ_LOG"'
+  exe="./src/firefox-137.0/obj/dist/bin/firefox"
+  arg="$(realpath -- "$exe")"
+  if test -z "$arg"; then
+    echo "Can't find executable: $exe"
+    exit 2
+  fi
+  arg="$arg -P"
+  set -x
+  time /usr/bin/sg firefoxgroup -c "$arg"
+  set +x
+else
+  set -x
+  time ./src/firefox-137.0/obj/dist/bin/firefox -P
+  set +x
+fi
+echo "exit code $?"

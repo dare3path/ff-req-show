@@ -1,0 +1,2149 @@
+diff --git a/devtools/client/netmonitor/src/connector/firefox-data-provider.js b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+index 0a85eb487e..0af5cabe6e 100644
+--- a/devtools/client/netmonitor/src/connector/firefox-data-provider.js
++++ b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+@@ -165,7 +165,7 @@ class FirefoxDataProvider {
+       this.fetchRequestHeaders(requestHeaders),
+       this.fetchResponseHeaders(responseHeaders),
+       this.fetchEarlyHintResponseHeaders(earlyHintsResponseHeaders),
+-      this.fetchPostData(requestPostData),
++      this.fetchPostData(requestPostData || { from: id } ), //eg. {"from":"server0.conn0.netEvent73"}
+       this.fetchRequestCookies(requestCookies),
+       this.fetchResponseCookies(responseCookies),
+       this.fetchResponseCache(responseCache),
+@@ -239,25 +239,178 @@ class FirefoxDataProvider {
+   }
+ 
+   async fetchPostData(requestPostData) {
++    //XXX: dump() are visible on terminal if about:config setting browser.dom.window.dump.enabled is true
++    dump("fetchPostData called with input: " + (requestPostData ? JSON.stringify(requestPostData) : "undefined") + "\n");
++    //const payload = { requestPostData: { postData: null, uploadHeaders: null } };
+     const payload = {};
+-    if (requestPostData?.postData) {
+-      const { text } = requestPostData.postData;
+-      const postData = await this.getLongString(text);
+-      const headers = CurlUtils.getHeadersFromMultipartText(postData);
+-
+-      // Calculate total header size and don't forget to include
+-      // two new-line characters at the end.
+-      const headersSize = headers.reduce((acc, { name, value }) => {
+-        return acc + name.length + value.length + 2;
+-      }, 0);
+-
+-      requestPostData.postData.text = postData;
+-      payload.requestPostData = {
+-        ...requestPostData,
+-        uploadHeaders: { headers, headersSize },
+-      };
++    // ^ originally this would return {} for blocked requests
++
++    let requestId = requestPostData?.requestId || requestPostData?.from; // Try input
++    dump("Initial requestId: " + requestId + "\n");
++
++    if (!requestId) {
++      dump("No requestId from input\n"); // No owner, no fallback
++      //payload.requestPostData = {};
++      //payload.requestPostData.postData = { text: null };
++      //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
+     }
+-    return payload;
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      dump("Network events count: " + networkEvents.length + "\n");
++      const event = networkEvents.find(e => e.actor === requestId || e.resourceId === requestId || e.channelId === requestId); // Prioritize actor match
++      if (!event || !event.actor) {
++        dump("No event or actor found for requestId: " + requestId + "\n");
++        //payload.requestPostData.postData = { text: null };
++        //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++        return payload;
++      }
++
++      dump("Found event: resourceId=" + event.resourceId + ", channelId=" + event.channelId + ", actor=" + event.actor + "\n");
++
++      let postDataText;
++      const client = this.commands.client;
++      const actorId = event.actor;
++      dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++      let theLongStringActorPostData=null;
++      try {
++        const packet = { to: actorId, type: "getRequestPostData" };
++        const startTime = Date.now();
++        const postDataResponse = await Promise.race([
++          client.request(packet),
++          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++        ]);
++        const elapsed = Date.now() - startTime;
++        dump("PostData response: " + JSON.stringify(postDataResponse) + " after " + elapsed + "ms\n");
++
++        if (postDataResponse.postData) {
++          theLongStringActorPostData=postDataResponse.postData;
++        }
++
++        if (postDataResponse.postData?.text?.substring) {
++          postDataText = await postDataResponse.postData.text.substring(0, postDataResponse.postData.text.length);
++          dump("Extracted LongStringActor text: " + postDataText + "\n");
++        } else {
++          postDataText = postDataResponse.postData?.text;
++          dump("Extracted text: " + (postDataText || "null") + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching postData: " + e + "\n");
++        postDataText = null;
++        dump("Falling back to null\n");
++      }
++
++
++
++      if (postDataText) {
++        payload.requestPostData = {};
++        payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++        //original curl headers code logic, hopefully.
++        try {
++          //if (requestPostData?.postData) {
++          if (theLongStringActorPostData) {
++            //const { text } = requestPostData.postData;
++            const { text } = theLongStringActorPostData;
++            //that 'text' is a LongStringActor, supposedly, from getRequestPostData() function's return.
++            const postData = await this.getLongString(text);//XXX: 'text' here must be LongStringActor else(sometimes?) u get: "JavaScript error: resource://devtools/client/shared/string-utils.js, line 19: TypeError: can't access property "type", stringGrip is null"
++            //const postData=await this.getLongString(postDataText);//before processing it like below
++            const headers = CurlUtils.getHeadersFromMultipartText(postData);
++
++            // Calculate total header size and don't forget to include
++            // two new-line characters at the end.
++            const headersSize = headers.reduce((acc, { name, value }) => {
++              return acc + name.length + value.length + 2;
++            }, 0);
++            //requestPostData.postData.text = postData;
++            dump("!!! for curl, postData="+postData+"\n");
++
++            //      const headers = CurlUtils.getHeadersFromMultipartText(requestPostData/*the func arg!*/);//postDataText || "");
++            //      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++            dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++            // always(so far): Headers from CurlUtils: [], Size: 0
++            payload.requestPostData.uploadHeaders = { headers, headersSize };
++          } else {
++            dump("!! got nothing from the curl block.\n");
++            //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++          } // if else
++        } catch (e) {
++          dump("Error with CurlUtils: " + e + "\n");//keep
++          //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++        } //curl logic ends.
++
++        //const isBinary = /[\x00-\x1f]/.test(postDataText); // Any control char < 0x20
++        const isBinary = /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(postDataText); // Control chars except tab, newline, CR
++        // Process binary data
++        if (isBinary) {
++          dump("Detected binary payload, original text as hex: " +
++            Array.from(postDataText, char => char.charCodeAt(0).toString(16).padStart(2, "0")).join(" ") + "\n");
++
++          // Store raw text before we mess with it
++          const rawText = postDataText;
++
++          // Split on single quotes, process each chunk for printf
++          const chunks = postDataText.split("'");
++          const processedChunks = chunks.map(chunk =>
++            Array.from(chunk, char => {
++              const code = char.charCodeAt(0);
++              if (code < 0x20) return "\\x" + code.toString(16).padStart(2, "0"); // Control chars
++              if (char === "\\") return "\\\\"; // Escape backslash
++              //if (char === "%") return "%%"; // Escape percent, XXX: no need if: printf '%b' 'payload', and a -- isn't needed either after '%b' due to how '%b' works and treat it as raw text, but u can do printf -- '%b' ...
++              return char; // Everything else (including %) as-is
++            }).join("")
++          );
++          const escapedForPrintf=processedChunks.join("'$\"'\"'");//for when using '%b' as first arg of printf!
++
++          // Generate hex dump with offset, hex, and raw text, 16 chars (8 bytes) per line
++          const bytes = Array.from(rawText);
++          const hexxedLines = [];
++          for (let i = 0; i < bytes.length; i += 8) {
++            const offset = i.toString(16).padStart(8, "0"); // 8-digit hex offset
++            const hexChunk = bytes.slice(i, i + 8)
++              .map(char => char.charCodeAt(0).toString(16).padStart(2, "0"))
++              .join(" ");
++            const rawChunk = bytes.slice(i, i + 8)
++              .map(char => {
++                const code = char.charCodeAt(0);
++                return (code < 0x20 || code > 0x7e) ? "." : char; // Unprintable as "."
++              }).join("");
++            hexxedLines.push(`${offset}: ${hexChunk.padEnd(23, " ")} | ${rawChunk}`);
++          }
++          const hexxed = hexxedLines.join("\n");
++
++
++          // Join with bash-safe single quote concatenation
++          postDataText = "This is your modded firefox saying that\n"+
++            " this request payload is binary\n"+
++            " therefore to see it raw\n"+
++            " you could do this in bash(long line follows btw):\n\n"+
++            // note a "--" isn't needed due to '%b' treating everything after as the text, not args!
++            "printf -- '%b' '" + escapedForPrintf + "'\n\n"+
++            " and maybe redirect that by appending this to it:\n"+
++            " >binary_payload.bin && xxd -g 1 -c 8 -- binary_payload.bin\n\n"+
++            "You should turn on Raw(top right) so it's monospaced\n"+
++            " and it's not interpreted like Form data(if it is)\n\n"+
++            "Otherwise here's a hex view of it:\n\n" +
++            hexxed +"\n\n"+
++            "And here's what it woulda been shown as,\n if we didn't get in the way at all:\n" + rawText;
++          dump("Processed binary text: " + postDataText + "\n");
++        } // if bin
++        dump("!!! will return this *.postData="+postDataText+"\n");
++        const postData=await this.getLongString(postDataText);
++        dump("!!! will return it as long string:"+postData+"\n");
++        payload.requestPostData.postData = { text: postData };
++      } // if not empty
++
++    } catch (e) {
++      dump("Outer error: " + e + "\n");
++      //payload.requestPostData.postData = { text: null };
++      //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload; //can be {}
+   }
+ 
+   async fetchRequestCookies(requestCookies) {
+diff --git a/devtools/client/netmonitor/src/utils/request-utils.js b/devtools/client/netmonitor/src/utils/request-utils.js
+index baa3c28a29..77afb5a647 100644
+--- a/devtools/client/netmonitor/src/utils/request-utils.js
++++ b/devtools/client/netmonitor/src/utils/request-utils.js
+@@ -56,7 +56,9 @@ async function getFormDataSections(
+     ? contentTypeHeader.value
+     : "";
+ 
++  dump("!!! helooo\n");
+   const contentType = await getLongString(contentTypeLongString);
++  dump("!!!2 "+contentType+"\n");
+ 
+   if (contentType && contentType.includes("x-www-form-urlencoded")) {
+     const postDataLongString = postData.postData.text;
+@@ -563,12 +565,18 @@ async function updateFormDataSections(props) {
+     requestPostDataAvailable,
+   } = request;
+ 
++  dump("!!!ok1 before headers check\n");
+   if (requestHeadersAvailable && !requestHeaders) {
++    dump("!!!ok2 requesting headers\n");
+     requestHeaders = await connector.requestData(id, "requestHeaders");
++    dump("!!!ok2_2 after requesting headers\n");
+   }
+ 
++  dump("!!!ok3 before checking requestPostData\n");
+   if (requestPostDataAvailable && !requestPostData) {
++    dump("!!!ok4 before requesting requestPostData\n");
+     requestPostData = await connector.requestData(id, "requestPostData");
++    dump("!!!ok5 after requesting requestPostData\n");
+   }
+ 
+   if (
+diff --git a/devtools/server/actors/network-monitor/network-event-actor.js b/devtools/server/actors/network-monitor/network-event-actor.js
+index 9e5a16ba46..97e84d7d21 100644
+--- a/devtools/server/actors/network-monitor/network-event-actor.js
++++ b/devtools/server/actors/network-monitor/network-event-actor.js
+@@ -77,6 +77,161 @@ class NetworkEventActor extends Actor {
+   ) {
+     super(conn, networkEventSpec);
+ 
++    this._channel = channel;
++    //this._postDataText = "nullHARDCODED";
++    this._postDataText = null;
++    dump("NetworkEventActor constructor, channel=" + channel +
++      ", channelId=" + (channel?.channelId || "unknown") +
++      ", loadInfo=" + (channel?.loadInfo || "null") +
++      ", customPostDataText=" + (channel?.loadInfo?.customPostDataText || "null") + "\n");
++    if (channel) {
++      dump("Channel type (toString): " + this._channel.toString() + "\n");
++      //dump("Channel constructor: " + (this._channel.constructor ? this._channel.constructor.name : "no constructor") + "\n");
++      //XXX:good but noisy:
++      //dump("Channel methods: " + Object.getOwnPropertyNames(this._channel).join(", ") + "\n");
++      //const props = Object.getOwnPropertyNames(this._channel).join(", ");
++      //dump("Channel properties: " + (props || "none") + "\n");
++      try {
++        const chan = channel.QueryInterface(Ci.nsIChannel);
++        dump("channel.QueryInterface(nsIChannel): " + chan + "\n");
++      } catch (e) {
++        dump("channel.QueryInterface failed: " + e + "\n");
++      }
++
++
++      // Check specific interfaces
++      let isHttpChannel = false;
++      try {
++        if (this._channel instanceof Ci.nsIHttpChannel) {
++          dump("Channel is nsIHttpChannel: yes\n");
++          isHttpChannel = true;
++        } else {
++          dump("Channel is nsIHttpChannel: no\n");
++        }
++      } catch (e) {
++        dump("Instance check failed: " + e + "\n");
++      }
++
++      if (isHttpChannel) {
++        try {
++          dump("Attempting getPostDataText\n");
++          let text = {};
++          channel.getPostDataText(text);
++          dump("getPostDataText called, text: " + (text.value || "empty") + "\n");
++          if (text.value) {
++            this._postDataText = text.value;
++            dump("Stored postDataText: " + this._postDataText + "\n");
++          } else {
++            dump("No valid postDataText from channel\n"); // Added: Log skip
++          }
++        } catch (e) {
++          dump("Initial getPostDataText call failed: " + e + "\n");
++        }
++      } else {
++        dump("Non-HTTP channel, skipping getPostDataText but trying the mLoadInfo way:\n");
++              // Verify channel identity
++        if (this._channel?.loadInfo) {
++          const loadInfo = channel.loadInfo;
++          dump("Raw loadInfo: " + loadInfo + "\n");
++          // Force introspection
++        try {
++          dump("loadInfo customPostDataText direct: " + loadInfo.customPostDataText + "\n");
++          dump("loadInfo.QueryInterface: " + loadInfo.QueryInterface + "\n");
++        } catch (e) {
++          dump("loadInfo introspection failed: " + e + "\n");
++        }
++//      // MODIFIED: Introspect nsILoadInfo to verify pointer and value
++//        try {
++//          const li = loadInfo.QueryInterface(Ci.nsILoadInfo);
++//          dump("loadInfo.QueryInterface(nsILoadInfo): " + li + "\n");
++//          dump("loadInfo customPostDataText direct: " + li.customPostDataText + "\n");
++//        } catch (e) {
++//          dump("loadInfo.QueryInterface failed: " + e + "\n");
++//        }
++//        // END MODIFIED
++          // MODIFIED: Direct XPCOM call to bypass proxy
++//        try {
++//          const li = loadInfo.QueryInterface(Ci.nsILoadInfo);
++//          dump("loadInfo.QueryInterface(nsILoadInfo): " + li + "\n");
++//          const directPostData = li.customPostDataText;
++//          dump("loadInfo customPostDataText direct: " + directPostData + "\n");
++//        } catch (e) {
++//          dump("loadInfo.QueryInterface failed: " + e + "\n");
++//        }
++//        // END MODIFIED
++//          // MODIFIED: Peek under XPConnect with wrappedJSObject
++//        try {
++//          const li = loadInfo.QueryInterface(Ci.nsILoadInfo);
++//          dump("loadInfo.QueryInterface(nsILoadInfo): " + li + "\n");
++//          dump("loadInfo customPostDataText direct: " + li.customPostDataText + "\n");
++//          if ("wrappedJSObject" in li) {
++//            dump("loadInfo.wrappedJSObject exists: " + li.wrappedJSObject + "\n");
++//            dump("wrappedJSObject.customPostDataText: " + li.wrappedJSObject.customPostDataText + "\n");
++//          } else {
++//            dump("loadInfo.wrappedJSObject not available\n");
++//          }
++//        } catch (e) {
++//          dump("loadInfo introspection failed: " + e + "\n");
++//        }
++//        // END MODIFIED
++          try {
++            if ("customPostDataText" in this._channel.loadInfo) {
++              const postData = channel.loadInfo.customPostDataText;
++              dump("Raw loadInfo: " + channel.loadInfo + ",type:"+ typeof channel.loadInfo+"\n");
++              dump("Raw loadInfo.customPostDataText: type=" + (typeof postData) +
++                ", value=" + (postData === null ? "null" : "'"+postData+"'(no quotes)") + "\n");
++              // Inspect object
++              dump("loadInfo properties: " + Object.keys(channel.loadInfo).join(", ") + "\n");
++
++          // MODIFIED: Hack for nsIDataChannel if empty
++          try {
++            const li = loadInfo.QueryInterface(Ci.nsILoadInfo);
++            dump("loadInfo.QueryInterface(nsILoadInfo): " + li + "\n");
++            dump("loadInfo customPostDataText direct: " + li.customPostDataText + "\n");
++            if ("wrappedJSObject" in li) {
++              dump("loadInfo.wrappedJSObject exists: " + li.wrappedJSObject + "\n");
++            } else {
++              dump("loadInfo.wrappedJSObject not available\n");
++            }
++//            if (!postData && isDataChannel(channel)) {
++//              dump("Hacking postData for nsIDataChannel\n");
++//              this._postDataText = "foo=barHACKED";
++//            }
++          } catch (e) {
++            dump("loadInfo introspection failed: " + e + "\n");
++          }
++        // END MODIFIED
++
++              if (postData) {
++                this._postDataText = postData;
++                dump("still in NetworkEventActor constructor, forced postDataText=" + this._postDataText + "\n");
++              } else {
++                // Fallback: hardcode foo=bar if empty for debug
++//                this._postDataText = "fooHARD=barCODEDfallbackForTests";
++//                dump("hardcoded this._postDataText="+this._postDataText+"\n");
++                dump("still in NetworkEventActor constructor, but channel.loadInfo.customPostDataText was falsy, and is of type="+ (typeof postData) + " and of value " + (postData === null ? "(null)" : "'"+postData+"'(no quotes)") + ".'\n");
++              }
++              // Changed: Add null check for logging
++              if (this._postDataText) {
++                dump("this._postDataText was just set to: " + this._postDataText + "\n");
++              } else {
++                dump("this._postDataText wasn't just set!\n");
++              }
++            } else {
++              dump("customPostDataText not found in loadInfo\n");
++            }
++            //this._postDataText = this._channel.loadInfo.customPostDataText;
++          } catch (e) {
++            dump("loadInfo getPostDataText failed: " + e + "\n");
++          }
++        } else {
++          dump("still in NetworkEventActor constructor, but channel.loadInfo was missing.\n");
++        }
++      }//else
++    } else {
++      dump("No channel in constructor\n");
++    }
++
+     this._sessionContext = sessionContext;
+     this._onNetworkEventUpdate = onNetworkEventUpdate;
+     this._onNetworkEventDestroy = onNetworkEventDestroy;
+@@ -89,6 +244,7 @@ class NetworkEventActor extends Actor {
+ 
+     this._discardRequestBody = !!networkEventOptions.discardRequestBody;
+     this._discardResponseBody = !!networkEventOptions.discardResponseBody;
++    dump("this._discardRequestBody="+this._discardRequestBody+", this._discardResponseBody="+this._discardResponseBody+"\n");
+ 
+     this._response = {
+       headers: [],
+@@ -109,6 +265,7 @@ class NetworkEventActor extends Actor {
+         cookies: [],
+         headers: [],
+         postData: {},
++        //postData: this._postDataText ? { text: this._postDataText } : {},
+         rawHeaders: "",
+       };
+       this._resource = this._createResource(networkEventOptions, channel);
+@@ -128,10 +285,11 @@ class NetworkEventActor extends Actor {
+       cookies,
+       headers,
+       postData: {},
++      //postData: this._postDataText ? { text: this._postDataText } : {},
+     };
+ 
+     this._resource = this._createResource(networkEventOptions, channel);
+-  }
++  } // end of constructor
+ 
+   /**
+    * Return the network event actor as a resource, and add the actorID which is
+@@ -316,19 +474,57 @@ class NetworkEventActor extends Actor {
+    *         The response packet - network POST data.
+    */
+   getRequestPostData() {
++    dump("getRequestPostData called, channel=" + this._channel +
++       ", loadInfo=" + (this._channel?.loadInfo || "null") +
++       ", this._channel?.loadInfo?.customPostDataText=" + (this._channel?.loadInfo?.customPostDataText || "null") +
++      ", this._postDataText=" + this._postDataText +
++      " and is of type: "+ typeof this._postDataText
++      +"\n");
++    dump("still in getRequestPostData, channel: " + (this._channel ? "present" : "null") + ", request.postData.text: " + (this._request.postData.text || "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n"); // Changed: Log all sources
+     let postDataText;
+     if (this._request.postData.text) {
+-      // Create a long string actor for the postData text if needed.
+       postDataText = this._createLongStringActor(this._request.postData.text);
++      dump("Returning original postData as LongStringActor: " + this._request.postData.text + "\n"); // Changed: Log value
++      return {
++        postData: { text: postDataText, size: this._request.postData.size },
++        postDataDiscarded: this._discardRequestBody,
++      };
+     }
+-
+-    return {
+-      postData: {
+-        size: this._request.postData.size,
+-        text: postDataText,
+-      },
+-      postDataDiscarded: this._discardRequestBody,
+-    };
++    if (this._postDataText) {
++      postDataText = this._createLongStringActor(this._postDataText);
++      dump("Returning stored postDataText as LongStringActor: " + this._postDataText + "\n"); // Changed: Log value
++      return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++    } else {
++      dump("seeing this._postDataText as falsy in getRequestPostData()\n");
++    }
++    if (!this._channel) {
++      dump("No channel available\n");
++      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++    }
++    try {
++      let text = {};
++      this._channel.getPostDataText(text);
++      dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++      if (text.value) {
++        postDataText = this._createLongStringActor(text.value);
++        dump("Returning live postData as LongStringActor: " + text.value + "\n"); // Changed: Log value
++        return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false };
++      }
++      dump("No valid live postData available\n");
++    } catch (e) {
++      dump("Live channel getPostDataText failed: " + e + ", falling back to loadInfo.\n");
++      // Fallback to loadInfo
++      if (this._channel.loadInfo && "customPostDataText" in this._channel.loadInfo) {
++        let loadInfoText = this._channel.loadInfo.customPostDataText;
++        dump("Falling back to loadInfo.customPostDataText: " + (loadInfoText || "null") + "\n");
++        if (loadInfoText) {
++          postDataText = this._createLongStringActor(loadInfoText);
++          return { postData: { text: postDataText, size: loadInfoText.length }, postDataDiscarded: false };
++        }
++      }
++    }
++    dump("Falling back to empty payload\n");
++    return { postData: { size: 0, text: null }, postDataDiscarded: false };
+   }
+ 
+   /**
+diff --git a/ipc/glue/BackgroundUtils.cpp b/ipc/glue/BackgroundUtils.cpp
+index 0f3f2976e2..347046732f 100644
+--- a/ipc/glue/BackgroundUtils.cpp
++++ b/ipc/glue/BackgroundUtils.cpp
+@@ -554,6 +554,20 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+         Some(overriddenFingerprintingSettings.ref());
+   }
+ 
++  // Add our field
++//  nsAutoString customPostDataText;
++//  aLoadInfo->GetCustomPostDataText(customPostDataText);
++//  // Wrap in Maybe<nsString>
++//  Maybe<nsString> maybeCustomPostDataText;
++//  if (!customPostDataText.IsEmpty()) {
++//    maybeCustomPostDataText.emplace(customPostDataText); // Some(value)
++//  } else {
++//    maybeCustomPostDataText.reset(); // Nothing()
++//  }
++  nsAutoString customPostDataText;
++  aLoadInfo->GetCustomPostDataText(customPostDataText);
++
++
+   *outLoadInfoArgs = LoadInfoArgs(
+       loadingPrincipalInfo, triggeringPrincipalInfo, principalToInheritInfo,
+       topLevelPrincipalInfo, optionalResultPrincipalURI, triggeringRemoteType,
+@@ -603,7 +617,10 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+       aLoadInfo->GetIsMetaRefresh(), aLoadInfo->GetLoadingEmbedderPolicy(),
+       aLoadInfo->GetIsOriginTrialCoepCredentiallessEnabledForTopLevel(),
+       unstrippedURI, interceptionInfoArg, aLoadInfo->GetIsNewWindowTarget(),
+-      aLoadInfo->GetUserNavigationInvolvement());
++      aLoadInfo->GetUserNavigationInvolvement(),
++      // Add our field at the end (position matches NeckoChannelParams.ipdlh)
++      customPostDataText);
++      //maybeCustomPostDataText);
+ 
+   return NS_OK;
+ }
+@@ -901,6 +918,22 @@ nsresult LoadInfoArgsToLoadInfo(const LoadInfoArgs& loadInfoArgs,
+       loadInfoArgs.isNewWindowTarget(),
+       loadInfoArgs.userNavigationInvolvement());
+ 
++  //we didn't add this to the constructor args list in LoadInfo because why
++  //would we.
++  // Add our field after construction
++//  // Handle Maybe<nsString>
++//  const Maybe<nsString>& maybeCustom = loadInfoArgs.customPostDataText();
++//  nsresult rv;
++//  if (maybeCustom.isSome()) {
++//    rv = loadInfo->SetCustomPostDataText(maybeCustom.value());
++//  } else {
++//    rv = loadInfo->SetCustomPostDataText(EmptyString());
++//  }
++//  NS_ENSURE_SUCCESS(rv, rv);
++  nsresult rv = loadInfo->SetCustomPostDataText(loadInfoArgs.customPostDataText());
++  NS_ENSURE_SUCCESS(rv, rv);
++
++
+   if (loadInfoArgs.isFromProcessingFrameAttributes()) {
+     loadInfo->SetIsFromProcessingFrameAttributes();
+   }
+@@ -964,6 +997,13 @@ void LoadInfoToParentLoadInfoForwarder(
+         Some(overriddenFingerprintingSettings.ref());
+   }
+ 
++   // Debug and grab customPostDataText
++  nsAutoString customPostData;
++  aLoadInfo->GetCustomPostDataText(customPostData);
++  nsCString customPostDataUTF8 = NS_ConvertUTF16toUTF8(customPostData);
++  printf("LoadInfoToParentLoadInfoForwarder LoadInfo=%p customPostDataText: %s\n",
++         aLoadInfo, customPostDataUTF8.get());
++
+   *aForwarderArgsOut = ParentLoadInfoForwarderArgs(
+       aLoadInfo->GetAllowInsecureRedirectToDataURI(), ipcController, tainting,
+       aLoadInfo->GetSkipContentSniffing(), aLoadInfo->GetHttpsOnlyStatus(),
+@@ -983,7 +1023,10 @@ void LoadInfoToParentLoadInfoForwarder(
+       overriddenFingerprintingSettingsArg, aLoadInfo->GetIsMetaRefresh(),
+       isThirdPartyContextToTopWindow, aLoadInfo->GetIsInThirdPartyContext(),
+       aLoadInfo->GetIsOn3PCBExceptionList(), unstrippedURI,
+-      aLoadInfo->GetUserNavigationInvolvement());
++      aLoadInfo->GetUserNavigationInvolvement(),
++      //customPostDataUTF8,//added
++      !customPostDataUTF8.IsEmpty() ? mozilla::Some(customPostDataUTF8) : mozilla::Nothing()  // 6th from bottom
++        );
+ }
+ 
+ nsresult MergeParentLoadInfoForwarder(
+@@ -1114,6 +1157,23 @@ nsresult MergeParentLoadInfoForwarder(
+   aLoadInfo->SetUserNavigationInvolvement(
+       uint8_t(aForwarderArgs.userNavigationInvolvement()));
+ 
++  printf("!!!! foo foo\n");
++  if (aForwarderArgs.customPostDataText().isSome()) {
++    printf("!!!! MergeParentLoadInfoForwarder aForwarderArgs.customPostDataText().isSome()\n");
++    rv = aLoadInfo->SetCustomPostDataText(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.customPostDataText().ref()));
++    NS_ENSURE_SUCCESS(rv, rv);
++    printf("MergeParentLoadInfoForwarder(2of2) set customPostDataText: %s\n",
++        aForwarderArgs.customPostDataText().ref().get());
++    nsAutoString customPostData;
++    rv = aLoadInfo->GetCustomPostDataText(customPostData);
++    NS_ENSURE_SUCCESS(rv, rv);
++    nsCString customPostDataUTF8 = NS_ConvertUTF16toUTF8(customPostData);
++    printf("MergeParentLoadInfoForwarder(1of2) set customPostDataText: %s\n",
++        customPostDataUTF8.get());
++  }
++  printf("!!!! fee fee\n");
++
+   return NS_OK;
+ }
+ 
+diff --git a/netwerk/base/LoadInfo.cpp b/netwerk/base/LoadInfo.cpp
+index 1ec2c64193..aeb4cfed85 100644
+--- a/netwerk/base/LoadInfo.cpp
++++ b/netwerk/base/LoadInfo.cpp
+@@ -48,6 +48,9 @@
+ #include "nsRedirectHistoryEntry.h"
+ #include "nsSandboxFlags.h"
+ #include "nsICookieService.h"
++//#include "nsTraceRefcnt.h" // For stack trace
++#include "mozilla/StackWalk.h" // For stack trace
++#include <execinfo.h>
+ 
+ using namespace mozilla::dom;
+ 
+@@ -103,6 +106,19 @@ static nsContentPolicyType InternalContentPolicyTypeForFrame(
+       aContentPolicyType, aSecurityFlags, aSandboxFlags);
+ }
+ 
++// netwerk/base/LoadInfo.cpp
++NS_IMETHODIMP
++LoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
++  aCustomPostDataText = mCustomPostDataText; // New: Return our string
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++LoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
++  mCustomPostDataText = aCustomPostDataText; // New: Set our string
++  return NS_OK;
++}
++
+ LoadInfo::LoadInfo(
+     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
+     nsINode* aLoadingContext, nsSecurityFlags aSecurityFlags,
+@@ -121,7 +137,10 @@ LoadInfo::LoadInfo(
+       mLoadingContext(do_GetWeakReference(aLoadingContext)),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(aContentPolicyType) {
++      mInternalContentPolicyType(aContentPolicyType),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText()
++{
+   MOZ_ASSERT(mLoadingPrincipal);
+   MOZ_ASSERT(mTriggeringPrincipal);
+ 
+@@ -334,7 +353,10 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow, nsIURI* aURI,
+       mContextForTopLevelLoad(do_GetWeakReference(aContextForTopLevelLoad)),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT) {
++      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText()
++{
+   // Top-level loads are never third-party
+   // Grab the information we can out of the window.
+   MOZ_ASSERT(aOuterWindow);
+@@ -399,7 +421,10 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT) {
++      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText()
++{
+   // Top-level loads are never third-party
+   // Grab the information we can out of the window.
+   MOZ_ASSERT(aBrowsingContext);
+@@ -492,7 +517,10 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(aContentPolicyType) {
++      mInternalContentPolicyType(aContentPolicyType),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText()
++{
+   CanonicalBrowsingContext* parentBC = aParentWGP->BrowsingContext();
+   MOZ_ASSERT(parentBC);
+   ComputeAncestors(parentBC, mAncestorPrincipals, mAncestorBrowsingContextIDs);
+@@ -696,7 +724,9 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
+           rhs.mHasInjectedCookieForCookieBannerHandling),
+       mSchemelessInput(rhs.mSchemelessInput),
+       mHttpsUpgradeTelemetry(rhs.mHttpsUpgradeTelemetry),
+-      mIsNewWindowTarget(rhs.mIsNewWindowTarget) {
++      mIsNewWindowTarget(rhs.mIsNewWindowTarget),
++      // Changed: Add our field
++      mCustomPostDataText(rhs.mCustomPostDataText) {
+ }
+ 
+ LoadInfo::LoadInfo(
+@@ -834,7 +864,10 @@ LoadInfo::LoadInfo(
+       mSchemelessInput(aSchemelessInput),
+       mHttpsUpgradeTelemetry(aHttpsUpgradeTelemetry),
+       mUserNavigationInvolvement(aUserNavigationInvolvement),
+-      mIsNewWindowTarget(aIsNewWindowTarget) {
++      mIsNewWindowTarget(aIsNewWindowTarget),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText()
++{
+   // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
+   MOZ_ASSERT(mLoadingPrincipal ||
+              aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT);
+@@ -898,8 +931,75 @@ NS_IMPL_ISUPPORTS(LoadInfo, nsILoadInfo)
+ 
+ LoadInfo::~LoadInfo() { MOZ_RELEASE_ASSERT(NS_IsMainThread()); }
+ 
++//void StackWalkCallback(void* aPC, void* aClosure) {
++//  FILE* fp = static_cast<FILE*>(aClosure);
++//  char buf[1024];
++//  MozCodeAddressDetails details;
++//  if (MozDescribeCodeAddress(aPC, &details)) {
++//    fprintf(fp, "  %s:%d\n", details.function, details.line);
++//  }
++//}
++//static void StackWalkCallback(uint32_t aFrameNumber, void* aPC, void* aSP,
++//                              void* aClosure) {
++//  FILE* fp = static_cast<FILE*>(aClosure);
++//  MozCodeAddressDetails details;
++//  if (MozDescribeCodeAddress(aPC, &details)) {
++//    fprintf(fp, "  #%u %s (%s)\n", aFrameNumber, details.function,
++//            details.library);
++//  }
++//}
++
++////good but meh:
++//static void StackWalkCallback(uint32_t aFrameNumber, void* aPC, void* aSP,
++//                              void* aClosure) {
++//  FILE* fp = static_cast<FILE*>(aClosure);
++//  MozCodeAddressDetails details;
++//  // Clear details to ensure fresh data
++//  memset(&details, 0, sizeof(details));
++//  if (MozDescribeCodeAddress(aPC, &details)) {
++//    fprintf(fp, "  #%u %s (%s)\n", aFrameNumber,
++//            details.function ? details.function : "unknown",
++//            details.library ? details.library : "unknown"
++//            //,details.line
++//            );
++//  } else {
++//    fprintf(fp, "  #%u <unknown> (no symbol info)\n", aFrameNumber);
++//  }
++//  // Fallback: Raw PC for manual lookup
++//  fprintf(fp, "    PC=%p\n", aPC);
++//}
++
++void DumpStackTraceLinux() {
++  const int maxFrames = 64;
++  void* frames[maxFrames];
++  int frameCount = backtrace(frames, maxFrames);
++  char** symbols = backtrace_symbols(frames, frameCount);
++  if (symbols) {
++    for (int i = 0; i < frameCount; ++i) {
++      printf("%s\n", symbols[i]);
++    }
++    free(symbols);
++  }
++}
++
+ already_AddRefed<nsILoadInfo> LoadInfo::Clone() const {
+   RefPtr<LoadInfo> copy(new LoadInfo(*this));
++  // Changed: Debug clone
++  nsAutoString custom;
++  copy->GetCustomPostDataText(custom);
++  printf("LoadInfo::Clone() created, this=%p, customPostDataText: %s\n",
++      this,
++         NS_ConvertUTF16toUTF8(custom).get());
++//  printf("LoadInfo::Clone() type=%s, customPostDataText: %s\n",
++//         //this->IsTRRLoadInfo() ? "TRR" : "Regular",
++//         NS_ConvertUTF16toUTF8(custom).get());
++//  nsTraceRefcnt::DumpStackTrace(stdout); // Debug build only
++  //mozilla::StackWalk(StackWalkCallback, 0, 0, stdout); // Debug build
++  //MozStackWalk(StackWalkCallback, 0, 16, stdout); //XXX: useless without debug symbols; meh it's crap!
++  if (custom.IsEmpty()) {
++    printf("Not dumping stack atm. but our field is empty!\n");
++    //DumpStackTraceLinux();//this has file+offset which works with addr2line on cmdline!
++  }
+   return copy.forget();
+ }
+ 
+diff --git a/netwerk/base/LoadInfo.h b/netwerk/base/LoadInfo.h
+index 93cc8d3630..63516b04b3 100644
+--- a/netwerk/base/LoadInfo.h
++++ b/netwerk/base/LoadInfo.h
+@@ -66,6 +66,7 @@ class LoadInfo final : public nsILoadInfo {
+   NS_DECL_ISUPPORTS
+   NS_DECL_NSILOADINFO
+ 
++
+   // Used for TYPE_DOCUMENT load.
+   static already_AddRefed<LoadInfo> CreateForDocument(
+       dom::CanonicalBrowsingContext* aBrowsingContext, nsIURI* aURI,
+@@ -426,6 +427,8 @@ class LoadInfo final : public nsILoadInfo {
+ 
+   bool mIsNewWindowTarget = false;
+   bool mSkipHTTPSUpgrade = false;
++
++  nsString mCustomPostDataText; // Add this
+ };
+ 
+ // This is exposed solely for testing purposes and should not be used outside of
+diff --git a/netwerk/base/TRRLoadInfo.cpp b/netwerk/base/TRRLoadInfo.cpp
+index d1650595f8..dfb59a338c 100644
+--- a/netwerk/base/TRRLoadInfo.cpp
++++ b/netwerk/base/TRRLoadInfo.cpp
+@@ -5,6 +5,9 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "TRRLoadInfo.h"
++// Changed: Add full LoadInfo definition
++//#include "LoadInfo.h"
++
+ #include "mozilla/dom/ClientSource.h"
+ #include "mozilla/dom/FeaturePolicy.h"
+ #include "mozilla/dom/DOMTypes.h"
+@@ -21,12 +24,35 @@ NS_IMPL_ISUPPORTS(TRRLoadInfo, nsILoadInfo)
+ TRRLoadInfo::TRRLoadInfo(nsIURI* aResultPrincipalURI,
+                          nsContentPolicyType aContentPolicyType)
+     : mResultPrincipalURI(aResultPrincipalURI),
+-      mInternalContentPolicyType(aContentPolicyType) {}
++      mInternalContentPolicyType(aContentPolicyType),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText()
++  {
++printf("TRRLoadInfo constructed, customPostDataText init: %s\n",
++         NS_ConvertUTF16toUTF8(mCustomPostDataText).get());
++  }
+ 
+ already_AddRefed<nsILoadInfo> TRRLoadInfo::Clone() const {
++  printf("TRRLoadInfo::Clone() starting...\n");
+   nsCOMPtr<nsILoadInfo> loadInfo =
+       new TRRLoadInfo(mResultPrincipalURI, mInternalContentPolicyType);
+ 
++  // Changed: Copy customPostDataText
++  nsAutoString customPostData;
++  // Use const_cast to call non-const getter—safe here (read-only)
++  const_cast<TRRLoadInfo*>(this)->GetCustomPostDataText(customPostData);
++  //GetCustomPostDataText(customPostData);
++  if (!customPostData.IsEmpty()) {
++    nsresult rv = loadInfo->SetCustomPostDataText(customPostData);
++    if (NS_SUCCEEDED(rv)) {
++      printf("TRRLoadInfo::Clone() copied customPostDataText: %s\n",
++             NS_ConvertUTF16toUTF8(customPostData).get());
++    }
++  } else {
++    printf("TRRLoadInfo::Clone() no customPostDataText to copy\n");
++  }
++
++  printf("TRRLoadInfo::Clone() ended.\n");
+   return loadInfo.forget();
+ }
+ 
+@@ -950,5 +976,29 @@ TRRLoadInfo::GetFetchDestination(nsACString& aDestination) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
++NS_IMETHODIMP
++TRRLoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
++  // Changed: Use our own field
++  aCustomPostDataText = mCustomPostDataText;
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++TRRLoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
++  // Changed: Use our own field
++  mCustomPostDataText = aCustomPostDataText;
++  return NS_OK;
++}
++
++//NS_IMETHODIMP
++//TRRLoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
++//  return LoadInfo::GetCustomPostDataText(aCustomPostDataText); // Delegate to parent
++//}
++//
++//NS_IMETHODIMP
++//TRRLoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
++//  return LoadInfo::SetCustomPostDataText(aCustomPostDataText); // Delegate to parent
++//}
++
+ }  // namespace net
+ }  // namespace mozilla
+diff --git a/netwerk/base/TRRLoadInfo.h b/netwerk/base/TRRLoadInfo.h
+index 25f588c96f..9094634780 100644
+--- a/netwerk/base/TRRLoadInfo.h
++++ b/netwerk/base/TRRLoadInfo.h
+@@ -31,6 +31,7 @@ class TRRLoadInfo final : public nsILoadInfo {
+   already_AddRefed<nsILoadInfo> Clone() const;
+ 
+  private:
++  // Changed: Add our own field
+   virtual ~TRRLoadInfo() = default;
+ 
+   nsCOMPtr<nsIURI> mResultPrincipalURI;
+@@ -46,6 +47,8 @@ class TRRLoadInfo final : public nsILoadInfo {
+   Maybe<mozilla::dom::ClientInfo> mInitialClientInfo;
+   Maybe<mozilla::dom::ServiceWorkerDescriptor> mController;
+   Maybe<RFPTargetSet> mOverriddenFingerprintingSettings;
++
++  nsString mCustomPostDataText;
+ };
+ 
+ }  // namespace net
+diff --git a/netwerk/base/nsILoadInfo.idl b/netwerk/base/nsILoadInfo.idl
+index 774ec045c0..fb43b8ad7c 100644
+--- a/netwerk/base/nsILoadInfo.idl
++++ b/netwerk/base/nsILoadInfo.idl
+@@ -260,6 +260,7 @@ interface nsILoadInfo : nsISupports
+    */
+   readonly attribute nsIPrincipal loadingPrincipal;
+ 
++
+   /**
+    * A C++-friendly version of triggeringPrincipal.
+    *
+@@ -1626,4 +1627,9 @@ interface nsILoadInfo : nsISupports
+       return static_cast<mozilla::dom::UserNavigationInvolvement>(userNavigationInvolvement);
+     }
+ %}
++
++  attribute AString customPostDataText; // Back to this—works for JS
++  // Changed: Make getter const-friendly
++//  [noscript] AString customPostDataText getter;
++//  [noscript] void customPostDataText setter(in AString value);
+ };
+diff --git a/netwerk/ipc/NeckoChannelParams.ipdlh b/netwerk/ipc/NeckoChannelParams.ipdlh
+index 0924673e59..eec5582280 100644
+--- a/netwerk/ipc/NeckoChannelParams.ipdlh
++++ b/netwerk/ipc/NeckoChannelParams.ipdlh
+@@ -204,6 +204,9 @@ struct LoadInfoArgs
+   InterceptionInfoArg?        interceptionInfo;
+   bool                        isNewWindowTarget;
+   UserNavigationInvolvement   userNavigationInvolvement;
++  // MODIFIED: Add our field
++  nsString customPostDataText;
++  // END MODIFIED
+ };
+ 
+ /**
+@@ -301,6 +304,8 @@ struct ParentLoadInfoForwarderArgs
+ 
+   UserNavigationInvolvement userNavigationInvolvement;
+ 
++  nsCString? customPostDataText;  // Added this.
++                                  //
+   // IMPORTANT: when you add new properites here you must also update
+   // LoadInfoToParentLoadInfoForwarder and MergeParentLoadInfoForwarder
+   // in BackgroundUtils.cpp/.h!
+diff --git a/netwerk/protocol/data/DataChannelChild.cpp b/netwerk/protocol/data/DataChannelChild.cpp
+index a85895cb14..fa0b6780a2 100644
+--- a/netwerk/protocol/data/DataChannelChild.cpp
++++ b/netwerk/protocol/data/DataChannelChild.cpp
+@@ -30,9 +30,25 @@ DataChannelChild::DataChannelChild(nsIURI* aURI)
+ 
+ NS_IMETHODIMP
+ DataChannelChild::ConnectParent(uint32_t aId) {
++  printf("entering DataChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, aId);
+   MOZ_ASSERT(mIPCOpen);
++  if (mLoadInfo) {
++    nsAutoString postData;
++    mLoadInfo->GetCustomPostDataText(postData);
++    printf("DataChannelChild::ConnectParent before SendSetChannelIdForRedirect loadInfo=%p customPostDataText: %s\n",
++        mLoadInfo.get(), NS_ConvertUTF16toUTF8(postData).get());
++  }
++
++  SendSetChannelIdForRedirect(aId); //original line
++
++  if (mLoadInfo) {
++    nsAutoString postData;
++    mLoadInfo->GetCustomPostDataText(postData);
++    printf("DataChannelChild::ConnectParent after SendSetChannelIdForRedirect loadInfo=%p customPostDataText: %s\n",
++           mLoadInfo.get(), NS_ConvertUTF16toUTF8(postData).get());
++  }
+ 
+-  SendSetChannelIdForRedirect(aId);
++  printf("out OK DataChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, aId);
+   return NS_OK;
+ }
+ 
+diff --git a/netwerk/protocol/http/HttpChannelChild.cpp b/netwerk/protocol/http/HttpChannelChild.cpp
+index 5a38d5a035..1f50c119e8 100644
+--- a/netwerk/protocol/http/HttpChannelChild.cpp
++++ b/netwerk/protocol/http/HttpChannelChild.cpp
+@@ -68,6 +68,8 @@
+ #include "nsCORSListenerProxy.h"
+ #include "nsIOService.h"
+ 
++#include "nsString.h"
++
+ #include <functional>
+ 
+ using namespace mozilla::dom;
+@@ -155,6 +157,17 @@ HttpChannelChild::~HttpChannelChild() {
+   ReleaseMainThreadOnlyReferences();
+ }
+ 
++//NS_IMETHODIMP
++//HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = NS_LITERAL_STRING("");
++//  return NS_OK;
++//}
++NS_IMETHODIMP
++HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
+   if (NS_IsMainThread()) {
+     // Already on main thread, let dtor to
+@@ -1520,6 +1533,27 @@ mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect1Begin(
+     const ResourceTimingStructArgs& aTiming) {
+   // TODO: handle security info
+   LOG(("HttpChannelChild::RecvRedirect1Begin [this=%p]\n", this));
++    // Debug incoming LoadInfo
++  if (mLoadInfo) {
++    nsAutoString incomingPostData;
++    mLoadInfo->GetCustomPostDataText(incomingPostData);
++    printf("RecvRedirect1Begin mLoadInfo=%p customPostDataText: %s\n",
++           mLoadInfo.get(), NS_ConvertUTF16toUTF8(incomingPostData).get());
++//    // Use forwarded customPostDataText
++//    if (!aLoadInfoForwarder.customPostDataText().isNothing()) {
++//      mLoadInfo->SetCustomPostDataText(
++//          NS_ConvertUTF8toUTF16(aLoadInfoForwarder.customPostDataText().ref()));
++//      printf("!!! RecvRedirect1Begin set customPostDataText: %s\n",
++//             aLoadInfoForwarder.customPostDataText().ref().get());
++//    }
++    // Merge happens before this, just log
++    if (aLoadInfoForwarder.customPostDataText().isSome()) {
++      printf("RecvRedirect1Begin forwarded customPostDataText: %s\n",
++             aLoadInfoForwarder.customPostDataText().ref().get());
++    }
++  } else {
++    printf("RecvRedirect1Begin mLoadInfo is null\n");
++  }
+   // We set peer address of child to the old peer,
+   // Then it will be updated to new peer in OnStartRequest
+   mPeerAddr = aOldPeerAddr;
+@@ -1554,9 +1588,26 @@ nsresult HttpChannelChild::SetupRedirect(nsIURI* uri,
+   rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
++  // Debug mLoadInfo pre-clone
++  nsAutoString preClonePostData;
++  if (mLoadInfo) {
++    mLoadInfo->GetCustomPostDataText(preClonePostData);
++    printf("pre clone in SetupRedirect mLoadInfo=%p customPostDataText: %s\n",
++           mLoadInfo.get(), NS_ConvertUTF16toUTF8(preClonePostData).get());
++  } else {
++    printf("SetupRedirect mLoadInfo is null\n");
++  }
++
+   nsCOMPtr<nsIChannel> newChannel;
+   nsCOMPtr<nsILoadInfo> redirectLoadInfo =
+       CloneLoadInfoForRedirect(uri, redirectFlags);
++  
++  // Debug POST data
++  nsAutoString postData;
++  redirectLoadInfo->GetCustomPostDataText(postData);
++  printf("post clone in SetupRedirect redirectLoadInfo customPostDataText: %s\n",
++         NS_ConvertUTF16toUTF8(postData).get());
++
+   rv = NS_NewChannelInternal(getter_AddRefs(newChannel), uri, redirectLoadInfo,
+                              nullptr,  // PerformanceStorage
+                              nullptr,  // aLoadGroup
+@@ -1589,6 +1640,8 @@ void HttpChannelChild::Redirect1Begin(
+   nsresult rv;
+ 
+   LOG(("HttpChannelChild::Redirect1Begin [this=%p]\n", this));
++  printf("HttpChannelChild::Redirect1Begin [this=%p]\n", this);
++  printf("Redirect1Begin this=%p channelId=%" PRIu64 "\n", this, mChannelId);
+ 
+   MOZ_ASSERT(newOriginalURI, "newOriginalURI should not be null");
+ 
+@@ -1622,6 +1675,47 @@ void HttpChannelChild::Redirect1Begin(
+   if (NS_SUCCEEDED(rv)) {
+     MOZ_ALWAYS_SUCCEEDS(newChannel->SetLoadFlags(newLoadFlags));
+ 
++//    // Debug mChannel and newChannel LoadInfo
++//    nsCOMPtr<nsILoadInfo> oldLoadInfo = mChannel->LoadInfo();
++//    printf("Redirect1Begin old mChannel LoadInfo=%p customPostDataText: %s\n",
++//           oldLoadInfo.get(), NS_ConvertUTF16toUTF8(oldLoadInfo->GetCustomPostDataText()).get());
++//    nsCOMPtr<nsILoadInfo> newLoadInfo = newChannel->LoadInfo();
++//    printf("Redirect1Begin newChannel LoadInfo=%p customPostDataText: %s\n",
++//           newLoadInfo.get(), NS_ConvertUTF16toUTF8(newLoadInfo->GetCustomPostDataText()).get());
++    //
++    // Debug LoadInfo states
++    nsAutoString oldPostData;
++    mLoadInfo->GetCustomPostDataText(oldPostData);
++    printf("Redirect1Begin before newChannel, mLoadInfo=%p customPostDataText: %s\n",
++           mLoadInfo.get(), NS_ConvertUTF16toUTF8(oldPostData).get());
++
++    nsCOMPtr<nsILoadInfo> newLoadInfo = newChannel->LoadInfo();
++    nsAutoString newPostData;
++    newLoadInfo->GetCustomPostDataText(newPostData);
++    printf("Redirect1Begin newChannel LoadInfo=%p customPostDataText: %s\n",
++        newLoadInfo.get(), NS_ConvertUTF16toUTF8(newPostData).get());
++    nsCOMPtr<nsIIdentChannel> newIdent = do_QueryInterface(newChannel);
++    uint64_t newId = 0;
++    if (newIdent) {
++      nsresult rv = newIdent->GetChannelId(&newId);
++      if (NS_FAILED(rv)) {
++        printf("Redirect1Begin failed to get newChannel channelId: %x\n", static_cast<unsigned>(rv));
++      }
++    }
++//    printf("Redirect1Begin newChannel=%p channelId=%" PRIu64 "\n",
++//        newChannel.get(), newChannel->ChannelId());
++    printf("Redirect1Begin newChannel=%p channelId=%" PRIu64 "\n",
++         newChannel.get(), newId);
++
++//    // Ensure newChannel's LoadInfo has customPostDataText
++//    nsCOMPtr<nsILoadInfo> newLoadInfo = newChannel->LoadInfo();
++//    if (newLoadInfo && loadInfoForwarder.customPostDataText().isSome()) {
++//      newLoadInfo->SetCustomPostDataText(
++//          NS_ConvertUTF8toUTF16(loadInfoForwarder.customPostDataText().ref()));
++//      printf("Redirect1Begin set newLoadInfo customPostDataText: %s\n",
++//          loadInfoForwarder.customPostDataText().ref().get());
++//    }
++
+     if (mRedirectChannelChild) {
+       // Set the channelId allocated in parent to the child instance
+       nsCOMPtr<nsIHttpChannel> httpChannel =
+@@ -1630,17 +1724,89 @@ void HttpChannelChild::Redirect1Begin(
+         rv = httpChannel->SetChannelId(channelId);
+         MOZ_ASSERT(NS_SUCCEEDED(rv));
+       }
+-      mRedirectChannelChild->ConnectParent(registrarId);
+-    }
++
++      printf("Redirect1Begin before ConnectParent this=%p registrarId=%" PRIu32 "\n",
++           this, registrarId);
++
++      //mRedirectChannelChild->ConnectParent(registrarId);//original line!
++      rv = mRedirectChannelChild->ConnectParent(registrarId);//original line!mod
++      if (NS_FAILED(rv)) {
++        printf("Redirect1Begin ConnectParent failed rv=%x this=%p\n",
++            static_cast<unsigned>(rv), this);
++      }
++
++      nsCOMPtr<nsIChannel> redirectChan = do_QueryInterface(mRedirectChannelChild);
++      nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
++      nsAutoString postData;
++      redirectLoadInfo->GetCustomPostDataText(postData);
++      printf("Redirect1Begin after ConnectParent redirectChannel=%p redirectLoadInfo=%p customPostDataText: %s\n",
++           redirectChan.get(), redirectLoadInfo.get(), NS_ConvertUTF16toUTF8(postData).get());
++      // Verify channel pointer
++      printf("Redirect1Begin channel pointer check: mRedirectChannelChild=%p\n", mRedirectChannelChild.get());
++//      // Log right before JS handoff
++//      redirectChan->GetCustomPostDataText(postData);//failing line
++//      printf("Redirect1Begin pre-JS handoff redirectChannel=%p customPostDataText: %s\n",
++//          redirectChan.get(), NS_ConvertUTF16toUTF8(postData).get());
++//      printf("Redirect1Begin channel pointer check: mRedirectChannelChild=%p channelRaw=%p\n",
++//           mRedirectChannelChild.get(), static_cast<nsIChannel*>(mRedirectChannelChild));
++      // Fixed: Use redirectChan pointer, no bad cast
++//      printf("Redirect1Begin channel pointer check: mRedirectChannelChild=%p redirectChan=%p\n",
++//          mRedirectChannelChild.get(), redirectChan.get());
++//      // MODIFIED: Log LoadInfo pointer for JS comparison
++//      printf("Redirect1Begin channel pointer check: mRedirectChannelChild=%p redirectChan=%p loadInfoPtr=%p\n",
++//          mRedirectChannelChild.get(), redirectChan.get(), redirectLoadInfo.get());
++//      // END MODIFIED
++
++//      // MODIFIED: Log LoadInfo pointer and recheck post-IPC
++//      printf("Redirect1Begin channel pointer check: mRedirectChannelChild=%p redirectChan=%p loadInfoPtr=%p\n",
++//          mRedirectChannelChild.get(), redirectChan.get(), redirectLoadInfo.get());
++//      nsAutoString postIpcCheck;
++//      redirectLoadInfo->GetCustomPostDataText(postIpcCheck);
++//      printf("Redirect1Begin post-IPC recheck: loadInfo=%p customPostDataText: %s\n",
++//          redirectLoadInfo.get(), NS_ConvertUTF16toUTF8(postIpcCheck).get());
++//      // END MODIFIED
++          // MODIFIED: Log LoadInfo pointer, recheck, and serialize
++      printf("Redirect1Begin channel pointer check: mRedirectChannelChild=%p redirectChan=%p loadInfoPtr=%p\n",
++          mRedirectChannelChild.get(), redirectChan.get(), redirectLoadInfo.get());
++      nsAutoString postIpcCheck;
++      redirectLoadInfo->GetCustomPostDataText(postIpcCheck);
++      printf("Redirect1Begin post-IPC recheck: loadInfo=%p customPostDataText: %s\n",
++          redirectLoadInfo.get(), NS_ConvertUTF16toUTF8(postIpcCheck).get());
++      nsCOMPtr<nsISerializable> serializable = do_QueryInterface(redirectLoadInfo);
++      if (serializable) {
++        printf("Redirect1Begin LoadInfo is serializable\n");
++      } else {
++        printf("Redirect1Begin LoadInfo not serializable\n");
++      }
++      // END MODIFIED
++    } // keep!
++
++//    // Final check before JS
++//    nsAutoString finalPostData;
++//    redirectChan->GetLoadInfo(getter_AddRefs(redirectLoadInfo));
++//    redirectLoadInfo->GetCustomPostDataText(finalPostData);
++//    printf("Redirect1Begin pre-JS final check, channel=%p loadInfo=%p customPostDataText: %s\n",
++//           redirectChan.get(), redirectLoadInfo.get(), NS_ConvertUTF16toUTF8(finalPostData).get());
+ 
+     nsCOMPtr<nsISerialEventTarget> target = GetNeckoTarget();
+     MOZ_ASSERT(target);
+ 
+     rv = gHttpHandler->AsyncOnChannelRedirect(this, newChannel, redirectFlags,
+                                               target);
++
++    // Log after redirect
++    nsAutoString finalPostData;
++    mLoadInfo->GetCustomPostDataText(finalPostData);
++//    printf("Redirect1Begin after AsyncOnChannelRedirect, mLoadInfo=%p customPostDataText: %s\n",
++//           mLoadInfo.get(), NS_ConvertUTF16toUTF8(finalPostData).get());
++    printf("Redirect1Begin after AsyncOnChannelRedirect, mLoadInfo=%p customPostDataText: %s channelId=%" PRIu64 "\n",
++         mLoadInfo.get(), NS_ConvertUTF16toUTF8(finalPostData).get(), mChannelId);
+   }
+ 
+-  if (NS_FAILED(rv)) OnRedirectVerifyCallback(rv);
++  if (NS_FAILED(rv)) {
++    printf("HttpChannelChild::Redirect1Begin() failed so calling OnRedirectVerifyCallback next.\n");
++    OnRedirectVerifyCallback(rv);
++  }
+ }
+ 
+ mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect3Complete() {
+@@ -1818,6 +1984,8 @@ NS_IMETHODIMP
+ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   LOG(("HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this,
+        registrarId));
++  printf("HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this,
++       registrarId);
+   MOZ_ASSERT(NS_IsMainThread());
+   mozilla::dom::BrowserChild* browserChild = nullptr;
+   nsCOMPtr<nsIBrowserChild> iBrowserChild;
+@@ -1828,11 +1996,13 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   }
+ 
+   if (browserChild && !browserChild->IPCOpen()) {
++    printf("ret1 NS_ERROR_FAILURE in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
+     return NS_ERROR_FAILURE;
+   }
+ 
+   ContentChild* cc = static_cast<ContentChild*>(gNeckoChild->Manager());
+   if (cc->IsShuttingDown()) {
++    printf("ret2 NS_ERROR_FAILURE in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
+     return NS_ERROR_FAILURE;
+   }
+ 
+@@ -1853,6 +2023,7 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   HttpChannelConnectArgs connectArgs(registrarId);
+   if (!gNeckoChild->SendPHttpChannelConstructor(
+           this, browserChild, IPC::SerializedLoadContext(this), connectArgs)) {
++    printf("ret3 NS_ERROR_FAILURE in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
+     return NS_ERROR_FAILURE;
+   }
+ 
+@@ -1879,6 +2050,8 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+         NS_DISPATCH_NORMAL);
+ 
+     if (NS_WARN_IF(NS_FAILED(rv))) {
++      printf("ret4 rv=%x in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n",
++             static_cast<unsigned>(rv), this, registrarId);
+       return rv;
+     }
+ 
+@@ -1894,8 +2067,29 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   mSuspendForWaitCompleteRedirectSetup = true;
+ 
+   // Connect to socket process after mEventQ is suspended.
++  printf("HttpChannelChild::ConnectParent Before calling MaybeConnectToSocketProcess which maybe hangs?\n");
+   MaybeConnectToSocketProcess();
++  printf("HttpChannelChild::ConnectParent after called MaybeConnectToSocketProcess (didnt hang?)\n");
+ 
++  // Debug LoadInfo after all setup
++  if (mRedirectChannelChild) {
++    nsCOMPtr<nsIChannel> redirectChan = do_QueryInterface(mRedirectChannelChild);
++    nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
++    nsAutoString postData;
++    mLoadInfo->GetCustomPostDataText(postData);
++    redirectLoadInfo->SetCustomPostDataText(postData);
++    printf("ConnectParent redirectChannel=%p redirectLoadInfo=%p customPostDataText: %s\n",
++           redirectChan.get(), redirectLoadInfo.get(), NS_ConvertUTF16toUTF8(postData).get());
++    // Post-connect check
++    nsAutoString postCheck;
++    redirectLoadInfo->GetCustomPostDataText(postCheck);
++    printf("ConnectParent post-check redirectChannel=%p redirectLoadInfo=%p customPostDataText: %s\n",
++           redirectChan.get(), redirectLoadInfo.get(), NS_ConvertUTF16toUTF8(postCheck).get());
++  } else {
++      printf("no mRedirectChannelChild in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
++  }
++
++  printf("exiting OK HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
+   return NS_OK;
+ }
+ 
+@@ -1953,6 +2147,7 @@ HttpChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+ NS_IMETHODIMP
+ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+   LOG(("HttpChannelChild::OnRedirectVerifyCallback [this=%p]\n", this));
++  printf("HttpChannelChild::OnRedirectVerifyCallback [this=%p]\n", this);
+   MOZ_ASSERT(NS_IsMainThread());
+   nsCOMPtr<nsIURI> redirectURI;
+ 
+@@ -1969,6 +2164,7 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+     // to let nsHttpChannel::ContinueProcessResponse2 know it's redirecting to
+     // another protocol and throw an error.
+     LOG(("  redirecting to a protocol that doesn't implement nsIChildChannel"));
++    printf("  redirecting to a protocol that doesn't implement nsIChildChannel\n");
+     aResult = NS_ERROR_DOM_BAD_URI;
+   }
+ 
+@@ -1995,6 +2191,32 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+   }
+ 
+   if (NS_SUCCEEDED(aResult)) {
++    if (mRedirectChannelChild) {
++      nsCOMPtr<nsIChannel> redirectChan = do_QueryInterface(mRedirectChannelChild);
++      nsCOMPtr<nsIIdentChannel> redirectIdent = do_QueryInterface(mRedirectChannelChild);
++      nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
++      nsAutoString postData;
++      mLoadInfo->GetCustomPostDataText(postData);
++      redirectLoadInfo->SetCustomPostDataText(postData);
++      uint64_t redirectId = 0;
++      if (redirectIdent) {
++        nsresult rv = redirectIdent->GetChannelId(&redirectId);
++        NS_ENSURE_SUCCESS(rv, rv);
++      }
++      printf("OnRedirectVerifyCallback redirectChannel=%p channelId=%" PRIu64 " customPostDataText: %s\n",
++             redirectChan.get(), redirectId,
++             NS_ConvertUTF16toUTF8(postData).get());
++    }
++//    if (mRedirectChannelChild) {
++//      nsCOMPtr<nsILoadInfo> redirectLoadInfo = mRedirectChannelChild->LoadInfo();
++//      nsAutoString postData;
++//      mLoadInfo->GetCustomPostDataText(postData);
++//      redirectLoadInfo->SetCustomPostDataText(postData);
++//      printf("OnRedirectVerifyCallback redirectChannel=%p channelId=%" PRIu64 " customPostDataText: %s\n",
++//             mRedirectChannelChild.get(), mRedirectChannelChild->ChannelId(),
++//             NS_ConvertUTF16toUTF8(postData).get());
++//    }
++
+     // Note: this is where we would notify "http-on-modify-response" observers.
+     // We have deliberately disabled this for child processes (see bug 806753)
+     //
+diff --git a/netwerk/protocol/http/HttpChannelChild.h b/netwerk/protocol/http/HttpChannelChild.h
+index c952065b91..065359bd19 100644
+--- a/netwerk/protocol/http/HttpChannelChild.h
++++ b/netwerk/protocol/http/HttpChannelChild.h
+@@ -75,6 +75,7 @@ class HttpChannelChild final : public PHttpChannelChild,
+ 
+   HttpChannelChild();
+ 
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // Methods HttpBaseChannel didn't implement for us or that we override.
+   //
+   // nsIRequest
+diff --git a/netwerk/protocol/http/HttpChannelParent.cpp b/netwerk/protocol/http/HttpChannelParent.cpp
+index 03ec882a2d..2567a27775 100644
+--- a/netwerk/protocol/http/HttpChannelParent.cpp
++++ b/netwerk/protocol/http/HttpChannelParent.cpp
+@@ -1802,7 +1802,17 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   LOG(("Registered %p channel under id=%" PRIx64, newChannel,
+        mRedirectChannelId));
+ 
++    // Debug mChannel's LoadInfo before redirect logic
++  nsCOMPtr<nsILoadInfo> origLoadInfo = mChannel->LoadInfo();
++  nsAutoString origPostData;
++  if (origLoadInfo) {
++    origLoadInfo->GetCustomPostDataText(origPostData);
++    printf("StartRedirect orig mChannel LoadInfo=%p customPostDataText: %s\n",
++           origLoadInfo.get(), NS_ConvertUTF16toUTF8(origPostData).get());
++  }
++
+   if (mIPCClosed) {
++    printf("!!!!!!!! NS_BINDING_ABORTED in HttpChannelParent::StartRedirect\n");
+     return NS_BINDING_ABORTED;
+   }
+ 
+@@ -1867,6 +1877,15 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+       // None of the redirect IPC messaging takes place.
+       mChannel = do_QueryObject(newChannel);
+ 
++      // Debug after internal redirect
++      nsAutoString internalPostData;
++      if (mChannel) {
++        nsCOMPtr<nsILoadInfo> newLoadInfoPost = mChannel->LoadInfo();
++        newLoadInfoPost->GetCustomPostDataText(internalPostData);
++        printf("StartRedirect after internal redirect mChannel LoadInfo=%p customPostDataText: %s\n",
++               newLoadInfoPost.get(), NS_ConvertUTF16toUTF8(internalPostData).get());
++      }
++
+       callback->OnRedirectVerifyCallback(NS_OK);
+       return NS_OK;
+     }
+@@ -1915,12 +1934,22 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   }
+ 
+   if (!mIPCClosed) {
++
++    // Debug before SendRedirect1Begin
++    nsAutoString preSendPostData;
++    if (loadInfo) {
++      loadInfo->GetCustomPostDataText(preSendPostData);
++      printf("StartRedirect before SendRedirect1Begin LoadInfo=%p customPostDataText: %s\n",
++             loadInfo.get(), NS_ConvertUTF16toUTF8(preSendPostData).get());
++    }
++
+     cleanedUpResponseHead = *responseHead;
+     if (!SendRedirect1Begin(mRedirectChannelId, newOriginalURI, newLoadFlags,
+                             redirectFlags, loadInfoForwarderArg,
+                             std::move(cleanedUpResponseHead), securityInfo,
+                             channelId, mChannel->GetPeerAddr(),
+                             GetTimingAttributes(mChannel))) {
++      printf("!!!!!!!!!!! NS_BINDING_ABORTED number 2\n");
+       return NS_BINDING_ABORTED;
+     }
+   }
+@@ -1929,6 +1958,7 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+ 
+   mRedirectChannel = newChannel;
+   mRedirectCallback = callback;
++  printf("!!!!!!!!!!! NS_OK end of HttpChannelParent::StartRedirect\n");
+   return NS_OK;
+ }
+ 
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.cpp b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+index fbf4bdf1e2..b486b660fe 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.cpp
++++ b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+@@ -21,6 +21,8 @@
+ #include "nsQueryObject.h"
+ #include "mozilla/Logging.h"
+ 
++#include "nsString.h" // For nsAString
++
+ namespace mozilla::net {
+ 
+ mozilla::LazyLogModule gInterceptedLog("Intercepted");
+@@ -69,6 +71,12 @@ void InterceptedHttpChannel::ReleaseListeners() {
+   MOZ_DIAGNOSTIC_ASSERT(!LoadIsPending());
+ }
+ 
++NS_IMETHODIMP
++InterceptedHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ nsresult InterceptedHttpChannel::SetupReplacementChannel(
+     nsIURI* aURI, nsIChannel* aChannel, bool aPreserveMethod,
+     uint32_t aRedirectFlags) {
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.h b/netwerk/protocol/http/InterceptedHttpChannel.h
+index 704404c9f0..8d9bcdfd83 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.h
++++ b/netwerk/protocol/http/InterceptedHttpChannel.h
+@@ -221,6 +221,7 @@ class InterceptedHttpChannel final
+   TimeStamp mServiceWorkerLaunchEnd;
+ 
+  public:
++    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   static already_AddRefed<InterceptedHttpChannel> CreateForInterception(
+       PRTime aCreationTime, const TimeStamp& aCreationTimestamp,
+       const TimeStamp& aAsyncOpenTimestamp);
+diff --git a/netwerk/protocol/http/NullHttpChannel.cpp b/netwerk/protocol/http/NullHttpChannel.cpp
+index 1038ba82df..147da42fb9 100644
+--- a/netwerk/protocol/http/NullHttpChannel.cpp
++++ b/netwerk/protocol/http/NullHttpChannel.cpp
+@@ -7,6 +7,7 @@
+ #include "nsContentSecurityManager.h"
+ #include "nsIScriptSecurityManager.h"
+ #include "nsIStreamListener.h"
++#include "nsString.h"
+ 
+ namespace mozilla {
+ namespace net {
+@@ -57,6 +58,12 @@ NullHttpChannel::GetChannelId(uint64_t* aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::NullHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP
+ NullHttpChannel::SetChannelId(uint64_t aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+diff --git a/netwerk/protocol/http/NullHttpChannel.h b/netwerk/protocol/http/NullHttpChannel.h
+index 478d13e0a2..8689951ee0 100644
+--- a/netwerk/protocol/http/NullHttpChannel.h
++++ b/netwerk/protocol/http/NullHttpChannel.h
+@@ -56,6 +56,8 @@ class NullHttpChannel final : public nsINullChannel,
+   nsCString mTimingAllowOriginHeader;
+   bool mAllRedirectsSameOrigin{false};
+   bool mAllRedirectsPassTimingAllowCheck{false};
++// public:
++//    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+ };
+ 
+ }  // namespace net
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.cpp b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+index 8b7059426c..7a47772b86 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.cpp
++++ b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+@@ -13,6 +13,7 @@
+ #include "BinaryHttpRequest.h"
+ #include "nsIHttpHeaderVisitor.h"
+ #include "nsStringStream.h"
++#include "nsString.h"
+ 
+ namespace mozilla::net {
+ 
+@@ -35,6 +36,12 @@ ObliviousHttpChannel::ObliviousHttpChannel(
+   MOZ_ASSERT(mInnerChannelTimed);
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::ObliviousHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ ObliviousHttpChannel::~ObliviousHttpChannel() {
+   LOG(("ObliviousHttpChannel dtor [this=%p]", this));
+ }
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.h b/netwerk/protocol/http/ObliviousHttpChannel.h
+index 9dc9c9f689..df1315e492 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.h
++++ b/netwerk/protocol/http/ObliviousHttpChannel.h
+@@ -34,6 +34,7 @@ class ObliviousHttpChannel final : public nsIObliviousHttpChannel,
+   NS_DECL_NSISTREAMLISTENER
+   NS_DECL_NSIUPLOADCHANNEL2
+ 
++//     NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   ObliviousHttpChannel(nsIURI* targetURI,
+                        const nsTArray<uint8_t>& encodedConfig,
+                        nsIHttpChannel* innerChannel);
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 58094fa024..97f4185a6e 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -30,6 +30,8 @@
+ #include "TRR.h"
+ #include "TRRService.h"
+ 
++#include "nsString.h"
++
+ namespace mozilla::net {
+ 
+ NS_IMPL_ADDREF(TRRServiceChannel)
+@@ -50,6 +52,12 @@ bool TRRServiceChannel::DispatchRelease() {
+   return true;
+ }
+ 
++NS_IMETHODIMP
++TRRServiceChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP_(MozExternalRefCountType)
+ TRRServiceChannel::Release() {
+   nsrefcnt count = mRefCnt - 1;
+diff --git a/netwerk/protocol/http/TRRServiceChannel.h b/netwerk/protocol/http/TRRServiceChannel.h
+index d9365a592a..5b7e6b4911 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.h
++++ b/netwerk/protocol/http/TRRServiceChannel.h
+@@ -47,6 +47,7 @@ class TRRServiceChannel : public HttpBaseChannel,
+   NS_DECL_NSIPROTOCOLPROXYCALLBACK
+   NS_DECLARE_STATIC_IID_ACCESSOR(NS_TRRSERVICECHANNEL_IID)
+ 
++    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // nsIRequest
+   NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
+   NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+index e4479400a4..5e9e5db81c 100644
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -144,6 +144,18 @@
+ #  include "mozilla/StaticPrefs_fuzzing.h"
+ #endif
+ 
++#include "nsStreamUtils.h" // For NS_ReadInputStreamToString
++
++//#include "mozilla/StaticString.h"
++#include "nsIVariant.h"
++#include "nsString.h"
++//#include "nsIWritableVariant.h"
++#include "nsServiceManagerUtils.h"
++#include "nsILoadInfo.h"
++#include "nsIPropertyBag2.h" // For QI to property bag
++//#include "TRRLoadInfo.h"
++
++
+ namespace mozilla {
+ 
+ using namespace dom;
+@@ -3442,6 +3454,7 @@ void nsHttpChannel::HandleAsyncRedirectToUnstrippedURI() {
+ }
+ nsresult nsHttpChannel::RedirectToNewChannelForAuthRetry() {
+   LOG(("nsHttpChannel::RedirectToNewChannelForAuthRetry %p", this));
++  printf("nsHttpChannel::RedirectToNewChannelForAuthRetry %p",this);
+   nsresult rv = NS_OK;
+ 
+   nsCOMPtr<nsILoadInfo> redirectLoadInfo = CloneLoadInfoForRedirect(
+@@ -3552,11 +3565,30 @@ nsresult nsHttpChannel::StartRedirectChannelToURI(nsIURI* upgradedURI,
+                                                   uint32_t flags) {
+   nsresult rv = NS_OK;
+   LOG(("nsHttpChannel::StartRedirectChannelToURI()\n"));
++  printf("nsHttpChannel::StartRedirectChannelToURI()\n");
++
++//  // Changed: Log mLoadInfo before redirect
++  nsAutoString custom;
++  mLoadInfo->GetCustomPostDataText(custom);
++//  printf("Before nsHttpChannel::StartRedirectChannelToURI, mLoadInfo customPostDataText: %s\n",
++//         NS_ConvertUTF16toUTF8(custom).get());
++  // Debug before IPC
++//  nsAutoString preRedirectPostData;
++//  if (mLoadInfo) {
++//    mLoadInfo->GetCustomPostDataText(preRedirectPostData);
++    printf("StartRedirectChannelToURI mLoadInfo=%p customPostDataText: %s\n",
++           mLoadInfo.get(), NS_ConvertUTF16toUTF8(custom).get());
++//  }
+ 
+   nsCOMPtr<nsIChannel> newChannel;
+   nsCOMPtr<nsILoadInfo> redirectLoadInfo =
+       CloneLoadInfoForRedirect(upgradedURI, flags);
+ 
++  // Changed: Log redirectLoadInfo after cloning
++  redirectLoadInfo->GetCustomPostDataText(custom);
++  printf("Post-CloneLoadInfoForRedirect redirectLoadInfo customPostDataText: %s\n",
++         NS_ConvertUTF16toUTF8(custom).get());
++
+   nsCOMPtr<nsIIOService> ioService;
+   rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
+   NS_ENSURE_SUCCESS(rv, rv);
+@@ -3569,9 +3601,21 @@ nsresult nsHttpChannel::StartRedirectChannelToURI(nsIURI* upgradedURI,
+                              nsIRequest::LOAD_NORMAL, ioService);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
++  // Changed: Log newChannel’s loadInfo after creation
++  nsCOMPtr<nsILoadInfo> newLoadInfo;
++  newChannel->GetLoadInfo(getter_AddRefs(newLoadInfo));
++  newLoadInfo->GetCustomPostDataText(custom);
++  printf("Post-NS_NewChannelInternal newChannel loadInfo customPostDataText: %s\n",
++         NS_ConvertUTF16toUTF8(custom).get());
++
+   rv = SetupReplacementChannel(upgradedURI, newChannel, true, flags);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
++  // Changed: Log mLoadInfo after replacement
++  mLoadInfo->GetCustomPostDataText(custom);
++  printf("Post-SetupReplacementChannel mLoadInfo customPostDataText: %s\n",
++         NS_ConvertUTF16toUTF8(custom).get());
++
+   if (mHTTPSSVCRecord) {
+     RefPtr<nsHttpChannel> httpChan = do_QueryObject(newChannel);
+     nsCOMPtr<nsIDNSHTTPSSVCRecord> rec = mHTTPSSVCRecord.ref();
+@@ -6003,6 +6047,7 @@ nsresult nsHttpChannel::AsyncProcessRedirection(uint32_t redirectType) {
+ }
+ 
+ nsresult nsHttpChannel::ContinueProcessRedirectionAfterFallback(nsresult rv) {
++  printf("nsHttpChannel::ContinueProcessRedirectionAfterFallback\n");
+   // Kill the current cache entry if we are redirecting
+   // back to ourself.
+   bool redirectingBackToSameURI = false;
+@@ -6671,6 +6716,160 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   NS_ENSURE_TRUE(!LoadIsPending(), NS_ERROR_IN_PROGRESS);
+   NS_ENSURE_TRUE(!LoadWasOpened(), NS_ERROR_ALREADY_OPENED);
+ 
++  nsString key;
++  key.AssignLiteral("postDataText"); // Define once, ASCII
++
++
++  printf("!!!! in nsHttpChannel::AsyncOpen before the aborted check...\n");
++  if (mCanceled && mStatus == NS_BINDING_ABORTED) {
++    printf("!!!! Cancelled via NS_BINDING_ABORTED\n");
++    if (mUploadStream) {
++      nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++      nsAutoCString body; // Change to nsAutoCString for UTF-8
++      nsresult rv;
++
++      // Try to clone the stream to avoid consuming it
++      nsCOMPtr<nsIInputStream> clonedStream;
++      rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++      if (NS_SUCCEEDED(rv) && clonedStream) {
++        rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++        if (NS_SUCCEEDED(rv)) {
++          mPostDataText = body; // Already nsCString
++                                //printf("Captured POST payload: %s\n", mPostDataText.get());
++          printf("Captured1 aborted cloned POST from .cpp so mPostDataText set to: %s\n", mPostDataText.get());
++          nsString postDataTextValue = NS_ConvertUTF8toUTF16(mPostDataText);
++          if (mLoadInfo) {
++            // Create nsIWritableVariant
++            nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++            if (variant) {
++              nsresult rv = variant->SetAsAString(postDataTextValue); // Setter!
++              if (NS_SUCCEEDED(rv)) {
++                // Query mLoadInfo for nsIPropertyBag2
++                nsCOMPtr<nsIWritablePropertyBag> propBag = do_QueryInterface(mLoadInfo);
++                if (propBag) {
++                  rv = propBag->SetProperty(key, variant);
++                  if (NS_FAILED(rv)) {
++                    printf("SetProperty on loadInfo failed: %08x\n", static_cast<unsigned>(rv));
++                  } else {
++                    printf("Successfully set postDataText in loadInfo: %s\n", mPostDataText.get());
++                  }
++                } else {
++                  printf("Failed to QI mLoadInfo to nsIPropertyBag2\n");
++                }
++              } else {
++                printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++              }
++            } else {
++              printf("do_CreateInstance failed for nsIWritableVariant\n");
++            }
++          } else {
++            printf("mLoadInfo is null, cannot store postDataText\n");
++          }
++//          if (mLoadInfo) {
++//            // Create nsIWritableVariant
++//            nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++//            if (variant) {
++//              nsresult rv = variant->SetAsAString(postDataTextValue); // Setter!
++//              if (NS_SUCCEEDED(rv)) {
++//                //rv = SetProperty(key, variant);
++//                rv = mLoadInfo->SetAnnotation(key, variant);
++//                if (NS_FAILED(rv)) {
++//                  printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//                }
++//              } else {
++//                printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++//              }
++//            } else {
++//              printf("do_CreateInstance failed for nsIWritableVariant\n");
++//            }
++//          }
++
++//          // Pass to network event (for JS)
++//    if (mNetworkEventOptions) {
++//      mNetworkEventOptions->SetPostDataText(postDataTextValue); // Hypothetical
++//    }
++//    // Store it in mLoadInfo annotations
++//    if (mLoadInfo) {
++//      //nsString key = NS_LITERAL_STRING("postDataText");
++//      nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++//      if (variant) {
++//        variant->SetAsAString(postDataTextValue);
++//        mLoadInfo->SetAnnotation(key, variant);
++//      }
++//    }
++//          // Create nsIVariant
++//    nsCOMPtr<nsIVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++//    if (variant) {
++//      nsresult rv = variant->SetAsString(postDataTextValue); // Fixed typo
++//      if (NS_SUCCEEDED(rv)) {
++//        rv = SetProperty(key, variant);
++//        if (NS_FAILED(rv)) {
++//          printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//        }
++//      } else {
++//        printf("SetAsString failed: %08x\n", static_cast<unsigned>(rv));
++//      }
++//    } else {
++//      printf("do_CreateInstance failed for nsIVariant\n");
++//    }
++//          // Create nsIVariant
++//          nsCOMPtr<nsIVariant> variant;
++//          nsresult rv = NS_NewVariant(getter_AddRefs(variant));
++//          if (NS_SUCCEEDED(rv)) {
++//            rv = variant->SetAsAString(postDataTextValue);
++//            if (NS_SUCCEEDED(rv)) {
++//              rv = SetProperty(key, variant);
++//              if (NS_FAILED(rv)) {
++//                printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//              }
++//            } else {
++//              printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++//            }
++//          } else {
++//            printf("NS_NewVariant failed: %08x\n", static_cast<unsigned>(rv));
++//          }
++          //nsresult rv = SetProperty(key, postDataTextValue);
++          //nsresult rv = SetProperty(NS_LITERAL_STRING("postDataText"), postDataTextValue);
++          //if (NS_FAILED(rv)) {
++          //  printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++          //}
++        }
++      } else if (seekable) {
++        // Fallback for seekable streams
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++        rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++        if (NS_SUCCEEDED(rv)) {
++          mPostDataText = body;
++          //printf("Captured POST payload: %s\n", mPostDataText.get());
++          printf("Captured2 aborted seekable POST from .cpp so mPostDataText set to: %s\n", mPostDataText.get());
++          seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++          nsString postDataTextValue = NS_ConvertUTF8toUTF16(mPostDataText);
++//          nsresult rv = SetProperty(key, postDataTextValue);
++//          //nsresult rv = SetProperty(NS_LITERAL_STRING("postDataText"), postDataTextValue);
++//          if (NS_FAILED(rv)) {
++//            printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//          }
++          // Create nsIWritableVariant
++          nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++          if (variant) {
++            nsresult rv = variant->SetAsAString(postDataTextValue); // Setter!
++            if (NS_SUCCEEDED(rv)) {
++              rv = SetProperty(key, variant);
++              if (NS_FAILED(rv)) {
++                printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++              }
++            } else {
++              printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++            }
++          } else {
++            printf("do_CreateInstance failed for nsIWritableVariant\n");
++          }
++        }
++      }
++    }//if
++    printf("!!!!!!!!!!!! Aborted with payload: %s\n", (!mPostDataText.IsEmpty() ? mPostDataText.get() : "null"));
++  }//if cancelled via aborted
++
+   if (mCanceled) {
+     ReleaseListeners();
+     return NS_FAILED(mStatus) ? mStatus : NS_ERROR_FAILURE;
+@@ -6680,6 +6879,125 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+     return NS_OK;
+   }
+ 
++  // Add payload capture here
++  printf("!!!! in nsHttpChannel::AsyncOpen before payload capture\n");
++  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoCString body; // Change to nsAutoCString for UTF-8
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body; // Already nsCString
++        //printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("Captured3 cloned POST from .cpp so mPostDataText set to: %s\n", mPostDataText.get());
++        nsString postDataTextValue = NS_ConvertUTF8toUTF16(mPostDataText);
++//        nsresult rv = SetProperty(key, postDataTextValue);
++//        //nsresult rv = SetProperty(NS_LITERAL_STRING("postDataText"), postDataTextValue);
++//        //mozilla::StaticString key(u"postDataText"); // UTF-16 literal
++//        //nsresult rv = SetProperty(key, postDataTextValue);
++//        if (NS_FAILED(rv)) {
++//          printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//        }
++//          // Create nsIWritableVariant
++//          nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++//          if (variant) {
++//            nsresult rv = variant->SetAsAString(postDataTextValue); // Setter!
++//            if (NS_SUCCEEDED(rv)) {
++//              rv = SetProperty(key, variant);
++//              if (NS_FAILED(rv)) {
++//                printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//              }
++//            } else {
++//              printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++//            }
++//          } else {
++//            printf("do_CreateInstance failed for nsIWritableVariant\n");
++//          }
++        if (mLoadInfo) {
++          nsresult rv = mLoadInfo->SetCustomPostDataText(postDataTextValue);
++          if (NS_FAILED(rv)) {
++            printf("SetCustomPostDataText failed: %08x\n", static_cast<unsigned>(rv));
++          } else {
++            // Changed: Read back customPostDataText for logging
++            nsAutoString customValue;
++            rv = mLoadInfo->GetCustomPostDataText(customValue);
++            if (NS_SUCCEEDED(rv)) {
++              printf("Successfully set customPostDataText in loadInfo: %s\n",
++                  NS_ConvertUTF16toUTF8(customValue).get());
++            } else {
++              printf("GetCustomPostDataText failed after set: %08x\n", static_cast<unsigned>(rv));
++            }
++          }//else
++        } else {
++          printf("mLoadInfo is null, cannot store postDataText\n");
++        }
++//          if (mLoadInfo) {
++//            // Create nsIWritableVariant
++//            nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++//            if (variant) {
++//              nsresult rv = variant->SetAsAString(postDataTextValue); // Setter!
++//              if (NS_SUCCEEDED(rv)) {
++//                // Query mLoadInfo for nsIPropertyBag2
++//                nsCOMPtr<nsIWritablePropertyBag> propBag = do_QueryInterface(mLoadInfo);
++//                if (propBag) {
++//                  rv = propBag->SetProperty(key, variant);
++//                  if (NS_FAILED(rv)) {
++//                    printf("SetProperty on loadInfo failed: %08x\n", static_cast<unsigned>(rv));
++//                  } else {
++//                    printf("Successfully set postDataText in loadInfo: %s\n", mPostDataText.get());
++//                  }
++//                } else {
++//                  printf("Failed to QI mLoadInfo to nsIPropertyBag2\n");
++//                }
++//              } else {
++//                printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++//              }
++//            } else {
++//              printf("do_CreateInstance failed for nsIWritableVariant\n");
++//            }
++//          } else {
++//            printf("mLoadInfo is null, cannot store postDataText\n");
++//          }
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body;
++        //printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("Captured4 seekable POST from .cpp so mPostDataText set to: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++        nsString postDataTextValue = NS_ConvertUTF8toUTF16(mPostDataText);
++//        nsresult rv = SetProperty(key, postDataTextValue);
++//        //nsresult rv = SetProperty(NS_LITERAL_STRING("postDataText"), postDataTextValue);
++//        if (NS_FAILED(rv)) {
++//          printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++//        }
++          // Create nsIWritableVariant
++          nsCOMPtr<nsIWritableVariant> variant = do_CreateInstance(NS_VARIANT_CONTRACTID);
++          if (variant) {
++            nsresult rv = variant->SetAsAString(postDataTextValue); // Setter!
++            if (NS_SUCCEEDED(rv)) {
++              rv = SetProperty(key, variant);
++              if (NS_FAILED(rv)) {
++                printf("SetProperty failed: %08x\n", static_cast<unsigned>(rv));
++              }
++            } else {
++              printf("SetAsAString failed: %08x\n", static_cast<unsigned>(rv));
++            }
++          } else {
++            printf("do_CreateInstance failed for nsIWritableVariant\n");
++          }
++      }
++    }
++  }
++
+   MOZ_ASSERT(NS_IsMainThread());
+ 
+   if (!gHttpHandler->Active()) {
+@@ -6771,6 +7089,18 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   return NS_OK;
+ }
+ 
++//NS_IMETHODIMP
++//nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = mPostDataText;
++//  return NS_OK;
++//}
++NS_IMETHODIMP
++nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  printf("GetPostDataText called, mPostDataText: %s\n", mPostDataText.get());
++  aPostDataText = NS_ConvertUTF8toUTF16(mPostDataText);
++  return NS_OK;
++}
++
+ void nsHttpChannel::AsyncOpenFinal(TimeStamp aTimeStamp) {
+   // We save this timestamp from outside of the if block in case we enable the
+   // profiler after AsyncOpen().
+@@ -11062,6 +11392,7 @@ NS_IMPL_ISUPPORTS(CopyNonDefaultHeaderVisitor, nsIHttpHeaderVisitor)
+ }  // anonymous namespace
+ 
+ nsresult nsHttpChannel::RedirectToInterceptedChannel() {
++  printf("in nsHttpChannel::RedirectToInterceptedChannel\n");
+   nsCOMPtr<nsINetworkInterceptController> controller;
+   GetCallback(controller);
+ 
+@@ -11078,6 +11409,13 @@ nsresult nsHttpChannel::RedirectToInterceptedChannel() {
+       mURI, mCaps, static_cast<nsProxyInfo*>(mProxyInfo.get()),
+       mProxyResolveFlags, mProxyURI, mChannelId, type, redirectLoadInfo);
+ 
++//  // Changed: Log type post-swap
++//  if (RefPtr<TRRLoadInfo> trr = do_QueryObject(redirectLoadInfo)) {
++//    printf("RedirectToInterceptedChannel redirectLoadInfo type=TRR\n");
++//  } else {
++//    printf("RedirectToInterceptedChannel redirectLoadInfo type=Regular\n");
++//  }
++
+   rv = SetupReplacementChannel(mURI, intercepted, true,
+                                nsIChannelEventSink::REDIRECT_INTERNAL);
+   NS_ENSURE_SUCCESS(rv, rv);
+diff --git a/netwerk/protocol/http/nsHttpChannel.h b/netwerk/protocol/http/nsHttpChannel.h
+index cb8b8b7406..a187bb1237 100644
+--- a/netwerk/protocol/http/nsHttpChannel.h
++++ b/netwerk/protocol/http/nsHttpChannel.h
+@@ -102,6 +102,9 @@ class nsHttpChannel final : public HttpBaseChannel,
+       nsACString& aServerResponseHeader) override;
+   NS_IMETHOD GetProxyChallenges(nsACString& aChallenges) override;
+   NS_IMETHOD GetWWWChallenges(nsACString& aChallenges) override;
++  
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   NS_IMETHOD SetProxyCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD SetWWWCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD OnAuthAvailable() override;
+@@ -849,6 +852,7 @@ class nsHttpChannel final : public HttpBaseChannel,
+   Maybe<nsCOMPtr<nsIDNSHTTPSSVCRecord>> mHTTPSSVCRecord;
+ 
+  protected:
++    nsCString mPostDataText; // ADDED: Store POST payload
+   virtual void DoNotifyListenerCleanup() override;
+ 
+   // Override ReleaseListeners() because mChannelClassifier only exists
+diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+index bf1ad9501f..7cf6791087 100644
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -801,6 +801,70 @@ nsresult nsHttpHandler::AsyncOnChannelRedirect(
+     nsIChannel* oldChan, nsIChannel* newChan, uint32_t flags,
+     nsIEventTarget* mainThreadEventTarget) {
+   MOZ_ASSERT(NS_IsMainThread() && (oldChan && newChan));
++  
++//  nsCOMPtr<nsIIdentChannel> oldIdent = do_QueryInterface(oldChan);
++//  uint64_t oldId = 0;
++//  if (oldIdent) oldIdent->GetChannelId(&oldId);
++//  nsCOMPtr<nsIIdentChannel> newIdent = do_QueryInterface(newChan);
++//  uint64_t newId = 0;
++//  if (newIdent) newIdent->GetChannelId(&newId);
++  // Old channel ID
++  nsCOMPtr<nsIIdentChannel> oldIdent = do_QueryInterface(oldChan);
++  uint64_t oldId = 0;
++  nsresult rv;
++  if (oldIdent) {
++    rv = oldIdent->GetChannelId(&oldId);
++    if (NS_FAILED(rv)) {
++      printf("AsyncOnChannelRedirect: Failed to get oldChan ID, rv=0x%" PRIx32 "\n", static_cast<uint32_t>(rv));
++      oldId = 0; // Reset on failure
++    }
++  } else {
++    printf("AsyncOnChannelRedirect: oldChan=%p lacks nsIIdentChannel\n", oldChan);
++  }
++
++  // New channel ID
++  nsCOMPtr<nsIIdentChannel> newIdent = do_QueryInterface(newChan);
++  uint64_t newId = 0;
++  if (newIdent) {
++    rv = newIdent->GetChannelId(&newId);
++    if (NS_FAILED(rv)) {
++      printf("AsyncOnChannelRedirect: Failed to get newChan ID, rv=0x%" PRIx32 "\n", static_cast<uint32_t>(rv));
++      newId = 0; // Reset on failure
++    }
++  } else {
++    printf("AsyncOnChannelRedirect: newChan=%p lacks nsIIdentChannel\n", newChan);
++  }
++  printf("AsyncOnChannelRedirect oldChan=%p channelId=%" PRIu64 " newChan=%p channelId=%" PRIu64 "\n",
++         oldChan, oldId, newChan, newId);
++
++  nsCOMPtr<nsILoadInfo> oldLoadInfo = oldChan->LoadInfo();
++  nsAutoString oldPostData;
++  oldLoadInfo->GetCustomPostDataText(oldPostData);
++  printf("AsyncOnChannelRedirect oldChan LoadInfo=%p customPostDataText: %s\n",
++         oldLoadInfo.get(), NS_ConvertUTF16toUTF8(oldPostData).get());
++
++  nsCOMPtr<nsILoadInfo> newLoadInfo = newChan->LoadInfo();
++  nsAutoString newPostData;
++  newLoadInfo->GetCustomPostDataText(newPostData);
++  printf("AsyncOnChannelRedirect newChan LoadInfo=%p customPostDataText: %s\n",
++         newLoadInfo.get(), NS_ConvertUTF16toUTF8(newPostData).get());
++//  printf("AsyncOnChannelRedirect oldChan=%p channelId=%" PRIu64 " newChan=%p channelId=%" PRIu64 "\n",
++//         oldChan, oldChan->ChannelId(), newChan, newChan->ChannelId());
++////  printf("AsyncOnChannelRedirect oldChan=%p newChan=%p\n",
++////         oldChan, newChan);
++//  nsCOMPtr<nsILoadInfo> oldLoadInfo = oldChan->LoadInfo();
++//  nsAutoString oldPostData;
++//  oldLoadInfo->GetCustomPostDataText(oldPostData);
++//  printf("AsyncOnChannelRedirect oldChan LoadInfo=%p customPostDataText: %s\n",
++//         oldLoadInfo.get(), NS_ConvertUTF16toUTF8(oldPostData).get());
++//
++//  nsCOMPtr<nsILoadInfo> newLoadInfo = newChan->LoadInfo();
++//  nsAutoString newPostData;
++//  newLoadInfo->GetCustomPostDataText(newPostData);
++//  printf("AsyncOnChannelRedirect newChan LoadInfo=%p customPostDataText: %s\n",
++//         newLoadInfo.get(), NS_ConvertUTF16toUTF8(newPostData).get());
++//
++
+ 
+   nsCOMPtr<nsIURI> oldURI;
+   oldChan->GetURI(getter_AddRefs(oldURI));
+diff --git a/netwerk/protocol/http/nsIHttpChannel.idl b/netwerk/protocol/http/nsIHttpChannel.idl
+index a8372ba080..ff151bd5b5 100644
+--- a/netwerk/protocol/http/nsIHttpChannel.idl
++++ b/netwerk/protocol/http/nsIHttpChannel.idl
+@@ -24,6 +24,7 @@ native UniqueProfileChunkedBuffer(mozilla::UniquePtr<mozilla::ProfileChunkedBuff
+ [builtinclass, scriptable, uuid(c5a4a073-4539-49c7-a3f2-cec3f0619c6c)]
+ interface nsIHttpChannel : nsIIdentChannel
+ {
++  void getPostDataText(out AString aPostDataText);
+     /**************************************************************************
+      * REQUEST CONFIGURATION
+      *
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+index d38cc43586..29e4765597 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+@@ -19,6 +19,8 @@
+ #include "nsNetUtil.h"
+ #include "nsServiceManagerUtils.h"
+ 
++#include "nsString.h"
++
+ NS_IMPL_ADDREF(nsViewSourceChannel)
+ NS_IMPL_RELEASE(nsViewSourceChannel)
+ /*
+@@ -45,6 +47,12 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIViewSourceChannel)
+ NS_INTERFACE_MAP_END
+ 
++NS_IMETHODIMP
++nsViewSourceChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ static nsresult WillUseExternalProtocolHandler(nsIIOService* aIOService,
+                                                const char* aScheme) {
+   nsCOMPtr<nsIProtocolHandler> handler;
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.h b/netwerk/protocol/viewsource/nsViewSourceChannel.h
+index 87c490f6b7..3ba43b499a 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.h
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.h
+@@ -48,6 +48,8 @@ class nsViewSourceChannel final : public nsIViewSourceChannel,
+   NS_FORWARD_SAFE_NSIFORMPOSTACTIONCHANNEL(mPostChannel)
+   NS_FORWARD_SAFE_NSIHTTPCHANNELINTERNAL(mHttpChannelInternal)
+ 
++//  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   // nsViewSourceChannel methods:
+   nsViewSourceChannel() = default;
+ 

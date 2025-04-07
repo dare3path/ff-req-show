@@ -1,0 +1,1065 @@
+diff --git a/devtools/client/netmonitor/src/connector/firefox-data-provider.js b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+index 0a85eb487e..fbcbccdb60 100644
+--- a/devtools/client/netmonitor/src/connector/firefox-data-provider.js
++++ b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+@@ -165,7 +165,7 @@ class FirefoxDataProvider {
+       this.fetchRequestHeaders(requestHeaders),
+       this.fetchResponseHeaders(responseHeaders),
+       this.fetchEarlyHintResponseHeaders(earlyHintsResponseHeaders),
+-      this.fetchPostData(requestPostData),
++      this.fetchPostData(requestPostData || { from: id } ), //eg. {"from":"server0.conn0.netEvent73"}
+       this.fetchRequestCookies(requestCookies),
+       this.fetchResponseCookies(responseCookies),
+       this.fetchResponseCache(responseCache),
+@@ -239,25 +239,178 @@ class FirefoxDataProvider {
+   }
+ 
+   async fetchPostData(requestPostData) {
++    //XXX: dump() are visible on terminal if about:config setting browser.dom.window.dump.enabled is true
++    dump("fetchPostData called with input: " + (requestPostData ? JSON.stringify(requestPostData) : "undefined") + "\n");
++    //const payload = { requestPostData: { postData: null, uploadHeaders: null } };
+     const payload = {};
+-    if (requestPostData?.postData) {
+-      const { text } = requestPostData.postData;
+-      const postData = await this.getLongString(text);
+-      const headers = CurlUtils.getHeadersFromMultipartText(postData);
+-
+-      // Calculate total header size and don't forget to include
+-      // two new-line characters at the end.
+-      const headersSize = headers.reduce((acc, { name, value }) => {
+-        return acc + name.length + value.length + 2;
+-      }, 0);
+-
+-      requestPostData.postData.text = postData;
+-      payload.requestPostData = {
+-        ...requestPostData,
+-        uploadHeaders: { headers, headersSize },
+-      };
++    // ^ originally this would return {} for blocked requests
++
++    let requestId = requestPostData?.requestId || requestPostData?.from; // Try input
++    dump("Initial requestId: " + requestId + "\n");
++
++    if (!requestId) {
++      dump("No requestId from input\n"); // No owner, no fallback
++      //payload.requestPostData = {};
++      //payload.requestPostData.postData = { text: null };
++      //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++      return payload;
+     }
+-    return payload;
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      dump("Network events count: " + networkEvents.length + "\n");
++      const event = networkEvents.find(e => e.actor === requestId || e.resourceId === requestId || e.channelId === requestId); // Prioritize actor match
++      if (!event || !event.actor) {
++        dump("No event or actor found for requestId: " + requestId + "\n");
++        //payload.requestPostData.postData = { text: null };
++        //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++        return payload;
++      }
++
++      dump("Found event: resourceId=" + event.resourceId + ", channelId=" + event.channelId + ", actor=" + event.actor + "\n");
++
++      let postDataText;
++      const client = this.commands.client;
++      const actorId = event.actor;
++      dump("Sending getRequestPostData to actor: " + actorId + "\n");
++
++      let theLongStringActorPostData=null;
++      try {
++        const packet = { to: actorId, type: "getRequestPostData" };
++        const startTime = Date.now();
++        const postDataResponse = await Promise.race([
++          client.request(packet),
++          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++        ]);
++        const elapsed = Date.now() - startTime;
++        dump("PostData response: " + JSON.stringify(postDataResponse) + " after " + elapsed + "ms\n");
++
++        if (postDataResponse.postData) {
++          theLongStringActorPostData=postDataResponse.postData;
++        }
++
++        if (postDataResponse.postData?.text?.substring) {
++          postDataText = await postDataResponse.postData.text.substring(0, postDataResponse.postData.text.length);
++          dump("Extracted LongStringActor text: " + postDataText + "\n");
++        } else {
++          postDataText = postDataResponse.postData?.text;
++          dump("Extracted text: " + (postDataText || "null") + "\n");
++        }
++      } catch (e) {
++        dump("Error fetching postData: " + e + "\n");
++        postDataText = null;
++        dump("Falling back to null\n");
++      }
++
++
++
++      if (postDataText) {
++        payload.requestPostData = {};
++        payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++        //original curl headers code logic, hopefully.
++        try {
++          //if (requestPostData?.postData) {
++          if (theLongStringActorPostData) {
++            //const { text } = requestPostData.postData;
++            const { text } = theLongStringActorPostData;
++            //that 'text' is a LongStringActor, supposedly, from getRequestPostData() function's return.
++            const postData = await this.getLongString(text);//XXX: 'text' here must be LongStringActor else(sometimes?) u get: "JavaScript error: resource://devtools/client/shared/string-utils.js, line 19: TypeError: can't access property "type", stringGrip is null"
++            //const postData=await this.getLongString(postDataText);//before processing it like below
++            const headers = CurlUtils.getHeadersFromMultipartText(postData);
++
++            // Calculate total header size and don't forget to include
++            // two new-line characters at the end.
++            const headersSize = headers.reduce((acc, { name, value }) => {
++              return acc + name.length + value.length + 2;
++            }, 0);
++            //requestPostData.postData.text = postData;
++            dump("!!! for curl, postData="+postData+"\n");
++
++            //      const headers = CurlUtils.getHeadersFromMultipartText(requestPostData/*the func arg!*/);//postDataText || "");
++            //      const headersSize = headers.reduce((acc, { name, value }) => acc + name.length + value.length + 2, 0);
++            dump("Headers from CurlUtils: " + JSON.stringify(headers) + ", Size: " + headersSize + "\n");
++            // always(so far): Headers from CurlUtils: [], Size: 0
++            payload.requestPostData.uploadHeaders = { headers, headersSize };
++          } else {
++            dump("!! got nothing from the curl block.\n");
++            //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++          } // if else
++        } catch (e) {
++          dump("Error with CurlUtils: " + e + "\n");//keep
++          //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++        } //curl logic ends.
++
++        //const isBinary = /[\x00-\x1f]/.test(postDataText); // Any control char < 0x20
++        const isBinary = /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(postDataText); // Control chars except tab, newline, CR
++        // Process binary data
++        if (isBinary) {
++          dump("Detected binary payload, original text as hex: " + 
++            Array.from(postDataText, char => char.charCodeAt(0).toString(16).padStart(2, "0")).join(" ") + "\n");
++
++          // Store raw text before we mess with it
++          const rawText = postDataText;
++
++          // Split on single quotes, process each chunk for printf
++          const chunks = postDataText.split("'");
++          const processedChunks = chunks.map(chunk =>
++            Array.from(chunk, char => {
++              const code = char.charCodeAt(0);
++              if (code < 0x20) return "\\x" + code.toString(16).padStart(2, "0"); // Control chars
++              if (char === "\\") return "\\\\"; // Escape backslash
++              //if (char === "%") return "%%"; // Escape percent, XXX: no need if: printf '%b' 'payload', and a -- isn't needed either after '%b' due to how '%b' works and treat it as raw text, but u can do printf -- '%b' ...
++              return char; // Everything else (including %) as-is
++            }).join("")
++          );
++          const escapedForPrintf=processedChunks.join("'$\"'\"'");//for when using '%b' as first arg of printf!
++
++          // Generate hex dump with offset, hex, and raw text, 16 chars (8 bytes) per line
++          const bytes = Array.from(rawText);
++          const hexxedLines = [];
++          for (let i = 0; i < bytes.length; i += 8) {
++            const offset = i.toString(16).padStart(8, "0"); // 8-digit hex offset
++            const hexChunk = bytes.slice(i, i + 8)
++              .map(char => char.charCodeAt(0).toString(16).padStart(2, "0"))
++              .join(" ");
++            const rawChunk = bytes.slice(i, i + 8)
++              .map(char => {
++                const code = char.charCodeAt(0);
++                return (code < 0x20 || code > 0x7e) ? "." : char; // Unprintable as "."
++              }).join("");
++            hexxedLines.push(`${offset}: ${hexChunk.padEnd(23, " ")} | ${rawChunk}`);
++          }
++          const hexxed = hexxedLines.join("\n");
++
++
++          // Join with bash-safe single quote concatenation
++          postDataText = "This is your modded firefox saying that\n"+
++            " this request payload is binary\n"+
++            " therefore to see it raw\n"+
++            " you could do this in bash(long line follows btw):\n\n"+
++            // note a "--" isn't needed due to '%b' treating everything after as the text, not args!
++            "printf -- '%b' '" + escapedForPrintf + "'\n\n"+
++            " and maybe redirect that by appending this to it:\n"+
++            " >binary_payload.bin && xxd -g 1 -c 8 -- binary_payload.bin\n\n"+
++            "You should turn on Raw(top right) so it's monospaced\n"+
++            " and it's not interpreted like Form data(if it is)\n\n"+
++            "Otherwise here's a hex view of it:\n\n" +
++            hexxed +"\n\n"+
++            "And here's what it woulda been shown as,\n if we didn't get in the way at all:\n" + rawText;
++          dump("Processed binary text: " + postDataText + "\n");
++        } // if bin
++        dump("!!! will return this *.postData="+postDataText+"\n");
++        const postData=await this.getLongString(postDataText);
++        dump("!!! will return it as long string:"+postData+"\n");
++        payload.requestPostData.postData = { text: postData };
++      } // if not empty
++
++    } catch (e) {
++      dump("Outer error: " + e + "\n");
++      //payload.requestPostData.postData = { text: null };
++      //payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 };
++    }
++
++    dump("Returning payload: " + JSON.stringify(payload) + "\n");
++    return payload; //can be {}
+   }
+ 
+   async fetchRequestCookies(requestCookies) {
+diff --git a/devtools/client/netmonitor/src/utils/request-utils.js b/devtools/client/netmonitor/src/utils/request-utils.js
+index baa3c28a29..77afb5a647 100644
+--- a/devtools/client/netmonitor/src/utils/request-utils.js
++++ b/devtools/client/netmonitor/src/utils/request-utils.js
+@@ -56,7 +56,9 @@ async function getFormDataSections(
+     ? contentTypeHeader.value
+     : "";
+ 
++  dump("!!! helooo\n");
+   const contentType = await getLongString(contentTypeLongString);
++  dump("!!!2 "+contentType+"\n");
+ 
+   if (contentType && contentType.includes("x-www-form-urlencoded")) {
+     const postDataLongString = postData.postData.text;
+@@ -563,12 +565,18 @@ async function updateFormDataSections(props) {
+     requestPostDataAvailable,
+   } = request;
+ 
++  dump("!!!ok1 before headers check\n");
+   if (requestHeadersAvailable && !requestHeaders) {
++    dump("!!!ok2 requesting headers\n");
+     requestHeaders = await connector.requestData(id, "requestHeaders");
++    dump("!!!ok2_2 after requesting headers\n");
+   }
+ 
++  dump("!!!ok3 before checking requestPostData\n");
+   if (requestPostDataAvailable && !requestPostData) {
++    dump("!!!ok4 before requesting requestPostData\n");
+     requestPostData = await connector.requestData(id, "requestPostData");
++    dump("!!!ok5 after requesting requestPostData\n");
+   }
+ 
+   if (
+diff --git a/devtools/server/actors/network-monitor/network-event-actor.js b/devtools/server/actors/network-monitor/network-event-actor.js
+index 9e5a16ba46..cf692fee01 100644
+--- a/devtools/server/actors/network-monitor/network-event-actor.js
++++ b/devtools/server/actors/network-monitor/network-event-actor.js
+@@ -77,6 +77,74 @@ class NetworkEventActor extends Actor {
+   ) {
+     super(conn, networkEventSpec);
+ 
++    this._channel = channel;
++    this._postDataText = null;
++//    if (channel) {
++//      channel.getPostDataText().then(text => {
++//        this._postDataText = text;
++//        console.log("Stored postDataText: " + text);
++//      }).catch(e => console.log("Error getting postDataText: " + e));
++//    }
++//    if (channel) {
++//      // Properly handle getPostDataText as a Promise
++//      try {
++//        const postDataTextPromise = channel.getPostDataText();
++//        if (postDataTextPromise && typeof postDataTextPromise.then === "function") {
++//          postDataTextPromise
++//            .then(text => {
++//              this._postDataText = text;
++//              dump("Stored postDataText: " + text + "\n");
++//            })
++//            .catch(e => 
++//              dump("Error getting postDataText: " + e+"\n")
++//            );
++//        } else {
++//          dump("getPostDataText did not return a Promise\n");
++//        }
++//      } catch (e) {
++//        dump("Initial getPostDataText call failed: " + e+"\n");
++//      }
++//    }
++    dump("NetworkEventActor constructor, channel: " + (channel ? "present" : "null") + "\n");
++    if (channel) {
++      try {
++        dump("Attempting getPostDataText\n");
++        let text = {};
++        channel.getPostDataText(text);
++        dump("getPostDataText called, text: " + (text.value || "empty") + "\n");
++        if (text.value) { //wtf grok3: && text.value !== "[]" && text.value.trim()) { // Changed: Only set if non-empty and not []
++          this._postDataText = text.value;
++          dump("Stored postDataText: " + this._postDataText + "\n");
++        } else {
++          dump("No valid postDataText from channel\n"); // Added: Log skip
++        }
++      } catch (e) {
++        dump("Initial getPostDataText call failed: " + e + "\n");
++      }
++    } else {
++      dump("No channel in constructor\n");
++    }
++//    dump("NetworkEventActor constructor, channel: " + (channel ? "present" : "null") + "\n");
++//    if (channel) {
++//      try {
++//        dump("Attempting getPostDataText\n");
++//        let text = {};
++//        channel.getPostDataText(text); // Out-param style
++//        dump("getPostDataText called, text: " + (text.value || "empty") + "\n");
++//        //this._postDataText = text.value || null;
++//        if (text.value && text.value !== "[]" && text.value.trim()) { // Changed: Only set if non-empty and not []
++//          this._postDataText = text.value;
++//          dump("Stored postDataText: " + this._postDataText + "\n");
++//        } else {
++//          dump("No valid postDataText from channel\n"); // Added: Log skip
++//        }
++//      } catch (e) {
++//        dump("Initial getPostDataText call failed: " + e + "\n");
++//      }
++//    } else {
++//      dump("No channel in constructor\n");
++//    }
++
+     this._sessionContext = sessionContext;
+     this._onNetworkEventUpdate = onNetworkEventUpdate;
+     this._onNetworkEventDestroy = onNetworkEventDestroy;
+@@ -315,6 +383,57 @@ class NetworkEventActor extends Actor {
+    * @return object
+    *         The response packet - network POST data.
+    */
++/*  getRequestPostData() {
++  //dump("getRequestPostData called\n");
++    dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n");
++    if (!this._channel) {
++      //dump("getRequestPostData called with No channel available");
++       if (this._postDataText) {
++        return { postData: { text: this._postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++      }
++      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++    }
++  let postDataText = null;
++  if (this._channel) {
++    dump("Channel available: " + !!this._channel + "\n");
++    try {
++      const channel = this._channel.QueryInterface(Ci.nsIHttpChannel);
++      dump("Channel QI to nsIHttpChannel: " + !!channel + "\n");
++      const postDataObj = {};
++      channel.GetPostDataText(postDataObj);
++      dump("GetPostDataText result: " + postDataObj.value + "\n");
++      if (postDataObj.value) {
++        postDataText = postDataObj.value;
++        postDataText = this._createLongStringActor(postDataText);
++        dump("Long string created: " + postDataText + "\n");
++      } else {
++        dump("No mPostDataText found\n");
++      }
++    } catch (e) {
++      dump("Error in GetPostDataText: " + e + "\n");
++    }
++  } else {
++    dump("No channel available\n");
++  }
++  const response = {
++    postData: {
++      size: postDataText ? postDataText.length : 0,
++      text: postDataText,
++    },
++    postDataDiscarded: this._discardRequestBody || false,
++  };
++  dump("Returning postData: " + JSON.stringify(response) + "\n");
++  return response;
++} //GOODish
++*/
++   
++  /**
++   * The "getRequestPostData" packet type handler.
++   *
++   * @return object
++   *         The response packet - network POST data.
++   */
++  /*ORIGINAL:
+   getRequestPostData() {
+     let postDataText;
+     if (this._request.postData.text) {
+@@ -330,6 +449,272 @@ class NetworkEventActor extends Actor {
+       postDataDiscarded: this._discardRequestBody,
+     };
+   }
++  */
++/* prevgood:  getRequestPostData() {
++    dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n");
++    let postDataText;
++    if (this._request.postData.text) {
++      dump("!!!get some original\n");
++      // Create a long string actor for the postData text if needed.
++      postDataText = this._createLongStringActor(this._request.postData.text);
++      return {
++        postData: {
++          size: this._request.postData.size,
++          text: postDataText,
++        },
++        postDataDiscarded: this._discardRequestBody,
++      };
++    }
++    dump("!!!carry on to modded\n");
++    if (this._postDataText) {
++      dump("Returning stored postDataText\n");
++      postDataText = this._createLongStringActor(this._postDataText);
++      return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++      //return { postData: { text: this._postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++    }
++    dump("No stored postDataText, checking channel\n");
++    if (!this._channel) {
++      dump("No channel available\n");
++      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++    }
++    // Fallback to live channel
++    try {
++      let text = {};
++      this._channel.getPostDataText(text);
++      dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++      if (text.value) {
++        return { postData: { text: text.value, size: text.value.length }, postDataDiscarded: false };
++      }
++    } catch (e) {
++      dump("Live channel getPostDataText failed: " + e + "\n");
++    }
++    dump("Falling back to empty payload\n");
++    return { postData: { size: 0, text: null }, postDataDiscarded: false };
++  }*/
++/*  getRequestPostData() {
++  dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n"); // Unchanged: Log call
++  let postDataText; // Unchanged: Declare postDataText
++  if (this._request.postData.text) { // Unchanged: Check original postData
++    // Changed: Restored LongStringActor from original
++    postDataText = this._createLongStringActor(this._request.postData.text); // Changed: Use LongStringActor like original
++    dump("Returning original postData as LongStringActor\n"); // Changed: Log as LongStringActor
++    return { // Changed: Match original structure
++      postData: { // Unchanged: postData object
++        size: this._request.postData.size, // Changed: Use original size
++        text: postDataText, // Changed: Use LongStringActor
++      },
++      postDataDiscarded: this._discardRequestBody, // Changed: Use original discard flag
++    };
++  }
++  // Changed: Your custom logic below
++  if (this._postDataText) { // Unchanged: Check stored postDataText
++    dump("Returning stored postDataText\n"); // Unchanged: Log stored
++    postDataText = this._createLongStringActor(this._postDataText); // Changed: Use LongStringActor for consistency
++    return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false }; // Changed: Add LongStringActor, keep your size
++  }
++  dump("No stored postDataText, checking channel\n"); // Unchanged: Log channel check
++  if (!this._channel) { // Unchanged: No channel check
++    dump("No channel available\n"); // Unchanged: Log no channel
++    return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Unchanged: Empty response
++  }
++  try { // Unchanged: Try live channel
++    let text = {}; // Unchanged: Out-param object
++    this._channel.getPostDataText(text); // Unchanged: Get live text
++    dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n"); // Unchanged: Log live text
++    if (text.value) { // Unchanged: Check live text
++      postDataText = this._createLongStringActor(text.value); // Changed: Use LongStringActor for live data
++      return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false }; // Changed: Add LongStringActor, keep your size
++    }
++  } catch (e) { // Unchanged: Catch error
++    dump("Live channel getPostDataText failed: " + e + "\n"); // Unchanged: Log error
++  }
++  dump("Falling back to empty payload\n"); // Unchanged: Log fallback
++  return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Unchanged: Empty response
++}*/
++  getRequestPostData() {
++    dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", request.postData.text: " + (this._request.postData.text || "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n"); // Changed: Log all sources
++    let postDataText;
++    if (this._request.postData.text) { //wtf: && this._request.postData.text !== "[]") { // Changed: Skip if empty array
++      postDataText = this._createLongStringActor(this._request.postData.text);
++      dump("Returning original postData as LongStringActor: " + this._request.postData.text + "\n"); // Changed: Log value
++      return {
++        postData: { text: postDataText, size: this._request.postData.size },
++        postDataDiscarded: this._discardRequestBody,
++      };
++    }
++    if (this._postDataText) { //wtf: && this._postDataText !== "[]") { // Changed: Skip if empty array
++      postDataText = this._createLongStringActor(this._postDataText);
++      dump("Returning stored postDataText as LongStringActor: " + this._postDataText + "\n"); // Changed: Log value
++      return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++    }
++    if (!this._channel) {
++      dump("No channel available\n");
++      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++    }
++    try {
++      let text = {};
++      this._channel.getPostDataText(text);
++      dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++      if (text.value) { //wtf: && text.value !== "[]") { // Changed: Skip if empty array
++        postDataText = this._createLongStringActor(text.value);
++        dump("Returning live postData as LongStringActor: " + text.value + "\n"); // Changed: Log value
++        return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false };
++      }
++      dump("No valid live postData available\n");
++    } catch (e) {
++      dump("Live channel getPostDataText failed: " + e + "\n");
++    }
++    dump("Falling back to empty payload\n");
++    return { postData: { size: 0, text: null }, postDataDiscarded: false };
++  }
++  /*
++    //
++  //good:
++  getRequestPostData() {
++  dump("getRequestPostData called, channel: " + (this._channel ? "present" : "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n");
++  let postDataText;
++  if (this._request.postData.text) {
++    postDataText = this._createLongStringActor(this._request.postData.text); // Use LongStringActor like original
++    dump("Returning original postData as LongStringActor\n");
++    return {
++      postData: { text: postDataText, size: this._request.postData.size }, // Match original structure
++      postDataDiscarded: this._discardRequestBody,
++    };
++  }
++  if (this._postDataText) {
++    postDataText = this._createLongStringActor(this._postDataText); // Use LongStringActor for stored data
++    dump("Returning stored postDataText as LongStringActor\n");
++    return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++  }
++  dump("No stored postDataText, checking channel\n");
++  if (!this._channel) {
++    dump("No channel available\n");
++    return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Null like original intent
++  }
++  try {
++    let text = {};
++    this._channel.getPostDataText(text);
++    dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++    if (text.value) {
++      postDataText = this._createLongStringActor(text.value); // Use LongStringActor for live data
++      dump("Returning live postData as LongStringActor\n");
++      return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false };
++    }
++  } catch (e) {
++    dump("Live channel getPostDataText failed: " + e + "\n");
++  }
++  dump("Falling back to empty payload\n");
++  return { postData: { size: 0, text: null }, postDataDiscarded: false }; // Null like original intent
++}*/
++/*  getRequestPostData() {
++  dump("getRequestPostData called\n");
++  let postDataText = null;
++  if (this.channel) {
++    try {
++      const channel = this.channel.QueryInterface(Ci.nsIHttpChannel);
++      const postDataObj = {};
++      channel.GetPostDataText(postDataObj);
++      dump("GetPostDataText result: " + postDataObj.value + "\n");
++      if (postDataObj.value) {
++        postDataText = postDataObj.value;
++        postDataText = this._createLongStringActor(postDataText);
++        dump("Long string created: " + postDataText + "\n");
++      } else {
++        dump("No mPostDataText found\n");
++      }
++    } catch (e) {
++      dump("Error in GetPostDataText: " + e + "\n");
++    }
++  }
++  const response = {
++    postData: {
++      size: postDataText ? postDataText.length : 0,
++      text: postDataText,
++    },
++    postDataDiscarded: this._discardRequestBody || false,
++  };
++  dump("Returning postData: " + JSON.stringify(response) + "\n");
++  return response;
++}*/
++/*  getRequestPostData() {
++    console.log("getRequestPostData called");
++    let postDataText = null;
++    if (this.channel) {
++      try {
++        const channel = this.channel.QueryInterface(Ci.nsIHttpChannel);
++        const postDataObj = {};
++        channel.GetPostDataText(postDataObj);
++        console.log("GetPostDataText result: " + postDataObj.value);
++        if (postDataObj.value) {
++          postDataText = postDataObj.value;
++          // Handle large strings if necessary
++          postDataText = this._createLongStringActor(postDataText);
++        } else {
++          console.log("No mPostDataText found");
++        }
++      } catch (e) {
++        console.error("Error in GetPostDataText: " + e);
++      }
++    }
++    return {
++      postData: {
++        size: postDataText ? postDataText.length : 0,
++        text: postDataText,
++      },
++      postDataDiscarded: this._discardRequestBody || false,
++    };
++  }
++  */
++/*  getRequestPostData() {
++    dump("!!! foooo\n");
++    dump("!!! getRequestPostData called, channel: " + !!this.channel + "\n");
++    Components.utils.reportError("getRequestPostData called"); // ADDED
++    console.log("getRequestPostData called, channel:", !!this.channel);
++    let postDataText;
++//    if (this._request.postData.text) {
++//      // Create a long string actor for the postData text if needed.
++//      postDataText = this._createLongStringActor(this._request.postData.text);
++//    }// ADDED: Fallback to channel if available
++//  else if (this.channel) {
++//    this.channel.QueryInterface(Ci.nsIHttpChannel).GetPostDataText(postDataText);
++//    if (postDataText) {
++//      postDataText = this._createLongStringActor(postDataText);
++//    }
++//  }
++
++//    if (this.channel) { // Prioritize our C++ capture
++//      this.channel.QueryInterface(Ci.nsIHttpChannel).GetPostDataText(postDataText);
++//      if (postDataText) {
++//        postDataText = this._createLongStringActor(postDataText);
++//      }
++//    }
++    if (this.channel) {
++      try {
++        let channel = this.channel.QueryInterface(Ci.nsIHttpChannel);
++        channel.GetPostDataText(postDataText);
++        console.log("GetPostDataText raw result:", postDataText);
++        if (postDataText) {
++          postDataText = this._createLongStringActor(postDataText);
++          console.log("Long string created:", postDataText);
++        }
++      } catch (e) {
++        console.log("GetPostDataText error:", e);
++      }
++    }
++    if (!postDataText && this._request.postData.text) { // Fallback
++      postDataText = this._createLongStringActor(this._request.postData.text);
++    }
++    console.log("getRequestPostData returning:", { text: postDataText, size: postDataText ? postDataText.length : 0 }); // Debug
++
++    return {
++      postData: {
++        // MODIFIED: Use text length if size is missing
++        size: this._request.postData.size || (postDataText ? postDataText.length : 0),
++        text: postDataText,
++      },
++      postDataDiscarded: this._discardRequestBody,
++    };
++  }*/
+ 
+   /**
+    * The "getSecurityInfo" packet type handler.
+diff --git a/netwerk/protocol/http/HttpChannelChild.cpp b/netwerk/protocol/http/HttpChannelChild.cpp
+index 5a38d5a035..d691d96f91 100644
+--- a/netwerk/protocol/http/HttpChannelChild.cpp
++++ b/netwerk/protocol/http/HttpChannelChild.cpp
+@@ -68,6 +68,8 @@
+ #include "nsCORSListenerProxy.h"
+ #include "nsIOService.h"
+ 
++#include "nsString.h"
++
+ #include <functional>
+ 
+ using namespace mozilla::dom;
+@@ -155,6 +157,17 @@ HttpChannelChild::~HttpChannelChild() {
+   ReleaseMainThreadOnlyReferences();
+ }
+ 
++//NS_IMETHODIMP
++//HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = NS_LITERAL_STRING("");
++//  return NS_OK;
++//}
++NS_IMETHODIMP
++HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
+   if (NS_IsMainThread()) {
+     // Already on main thread, let dtor to
+diff --git a/netwerk/protocol/http/HttpChannelChild.h b/netwerk/protocol/http/HttpChannelChild.h
+index c952065b91..065359bd19 100644
+--- a/netwerk/protocol/http/HttpChannelChild.h
++++ b/netwerk/protocol/http/HttpChannelChild.h
+@@ -75,6 +75,7 @@ class HttpChannelChild final : public PHttpChannelChild,
+ 
+   HttpChannelChild();
+ 
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // Methods HttpBaseChannel didn't implement for us or that we override.
+   //
+   // nsIRequest
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.cpp b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+index fbf4bdf1e2..b486b660fe 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.cpp
++++ b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+@@ -21,6 +21,8 @@
+ #include "nsQueryObject.h"
+ #include "mozilla/Logging.h"
+ 
++#include "nsString.h" // For nsAString
++
+ namespace mozilla::net {
+ 
+ mozilla::LazyLogModule gInterceptedLog("Intercepted");
+@@ -69,6 +71,12 @@ void InterceptedHttpChannel::ReleaseListeners() {
+   MOZ_DIAGNOSTIC_ASSERT(!LoadIsPending());
+ }
+ 
++NS_IMETHODIMP
++InterceptedHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ nsresult InterceptedHttpChannel::SetupReplacementChannel(
+     nsIURI* aURI, nsIChannel* aChannel, bool aPreserveMethod,
+     uint32_t aRedirectFlags) {
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.h b/netwerk/protocol/http/InterceptedHttpChannel.h
+index 704404c9f0..8d9bcdfd83 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.h
++++ b/netwerk/protocol/http/InterceptedHttpChannel.h
+@@ -221,6 +221,7 @@ class InterceptedHttpChannel final
+   TimeStamp mServiceWorkerLaunchEnd;
+ 
+  public:
++    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   static already_AddRefed<InterceptedHttpChannel> CreateForInterception(
+       PRTime aCreationTime, const TimeStamp& aCreationTimestamp,
+       const TimeStamp& aAsyncOpenTimestamp);
+diff --git a/netwerk/protocol/http/NullHttpChannel.cpp b/netwerk/protocol/http/NullHttpChannel.cpp
+index 1038ba82df..147da42fb9 100644
+--- a/netwerk/protocol/http/NullHttpChannel.cpp
++++ b/netwerk/protocol/http/NullHttpChannel.cpp
+@@ -7,6 +7,7 @@
+ #include "nsContentSecurityManager.h"
+ #include "nsIScriptSecurityManager.h"
+ #include "nsIStreamListener.h"
++#include "nsString.h"
+ 
+ namespace mozilla {
+ namespace net {
+@@ -57,6 +58,12 @@ NullHttpChannel::GetChannelId(uint64_t* aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::NullHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP
+ NullHttpChannel::SetChannelId(uint64_t aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+diff --git a/netwerk/protocol/http/NullHttpChannel.h b/netwerk/protocol/http/NullHttpChannel.h
+index 478d13e0a2..8689951ee0 100644
+--- a/netwerk/protocol/http/NullHttpChannel.h
++++ b/netwerk/protocol/http/NullHttpChannel.h
+@@ -56,6 +56,8 @@ class NullHttpChannel final : public nsINullChannel,
+   nsCString mTimingAllowOriginHeader;
+   bool mAllRedirectsSameOrigin{false};
+   bool mAllRedirectsPassTimingAllowCheck{false};
++// public:
++//    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+ };
+ 
+ }  // namespace net
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.cpp b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+index 8b7059426c..7a47772b86 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.cpp
++++ b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+@@ -13,6 +13,7 @@
+ #include "BinaryHttpRequest.h"
+ #include "nsIHttpHeaderVisitor.h"
+ #include "nsStringStream.h"
++#include "nsString.h"
+ 
+ namespace mozilla::net {
+ 
+@@ -35,6 +36,12 @@ ObliviousHttpChannel::ObliviousHttpChannel(
+   MOZ_ASSERT(mInnerChannelTimed);
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::ObliviousHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ ObliviousHttpChannel::~ObliviousHttpChannel() {
+   LOG(("ObliviousHttpChannel dtor [this=%p]", this));
+ }
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.h b/netwerk/protocol/http/ObliviousHttpChannel.h
+index 9dc9c9f689..df1315e492 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.h
++++ b/netwerk/protocol/http/ObliviousHttpChannel.h
+@@ -34,6 +34,7 @@ class ObliviousHttpChannel final : public nsIObliviousHttpChannel,
+   NS_DECL_NSISTREAMLISTENER
+   NS_DECL_NSIUPLOADCHANNEL2
+ 
++//     NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   ObliviousHttpChannel(nsIURI* targetURI,
+                        const nsTArray<uint8_t>& encodedConfig,
+                        nsIHttpChannel* innerChannel);
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 58094fa024..0d623390f0 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -30,6 +30,8 @@
+ #include "TRR.h"
+ #include "TRRService.h"
+ 
++#include "nsString.h"
++
+ namespace mozilla::net {
+ 
+ NS_IMPL_ADDREF(TRRServiceChannel)
+@@ -50,6 +52,18 @@ bool TRRServiceChannel::DispatchRelease() {
+   return true;
+ }
+ 
++//NS_IMETHODIMP
++//TRRServiceChannel::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = NS_LITERAL_STRING("");
++//  return NS_OK;
++//}
++
++NS_IMETHODIMP
++TRRServiceChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP_(MozExternalRefCountType)
+ TRRServiceChannel::Release() {
+   nsrefcnt count = mRefCnt - 1;
+diff --git a/netwerk/protocol/http/TRRServiceChannel.h b/netwerk/protocol/http/TRRServiceChannel.h
+index d9365a592a..5b7e6b4911 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.h
++++ b/netwerk/protocol/http/TRRServiceChannel.h
+@@ -47,6 +47,7 @@ class TRRServiceChannel : public HttpBaseChannel,
+   NS_DECL_NSIPROTOCOLPROXYCALLBACK
+   NS_DECLARE_STATIC_IID_ACCESSOR(NS_TRRSERVICECHANNEL_IID)
+ 
++    NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // nsIRequest
+   NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
+   NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+index e4479400a4..02a6c529ca 100644
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -144,6 +144,8 @@
+ #  include "mozilla/StaticPrefs_fuzzing.h"
+ #endif
+ 
++#include "nsStreamUtils.h" // For NS_ReadInputStreamToString
++
+ namespace mozilla {
+ 
+ using namespace dom;
+@@ -6680,6 +6682,107 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+     return NS_OK;
+   }
+ 
++  // Add payload capture here
++  printf("!!!! in nsHttpChannel::AsyncOpen before payload capture\n");
++/*  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoString body;
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = ReadFromInputStream(clonedStream, body); // Assume this utility function exists
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = ReadFromInputStream(mUploadStream, body);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++      }
++    }
++  }*/
++/*  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoString body;
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = NS_ConvertUTF16toUTF8(body);
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++      }
++    }
++  }*/
++  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoCString body; // Change to nsAutoCString for UTF-8
++    nsresult rv;
++
++    // Try to clone the stream to avoid consuming it
++    nsCOMPtr<nsIInputStream> clonedStream;
++    rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++    if (NS_SUCCEEDED(rv) && clonedStream) {
++      rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body; // Already nsCString
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++      }
++    } else if (seekable) {
++      // Fallback for seekable streams
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body;
++        printf("Captured POST payload: %s\n", mPostDataText.get());
++        printf("mPostDataText set to: %s\n", mPostDataText.get());
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++      }
++    }
++  }
++//  nsAutoCString method;
++//  mRequestHead.Method(method);
++//  if (mUploadStream && method.EqualsLiteral("POST")) {
++//    nsCString body;
++//    nsCOMPtr<nsIInputStream> stream = mUploadStream;
++//    uint64_t available;
++//    if (NS_SUCCEEDED(stream->Available(&available)) && available > 0) {
++//      char buffer[1024];
++//      uint32_t read;
++//      while (NS_SUCCEEDED(stream->Read(buffer, sizeof(buffer) - 1, &read)) && read > 0) {
++//        buffer[read] = '\0';
++//        body.Append(buffer);
++//      }
++//      LOG(("Captured POST payload: %s", body.get()));
++//      printf("Captured POST payload: %s\n", body.get()); // Debug to stdout
++//      mPostDataText = body; // Add to nsHttpChannel.h
++//      printf("mPostDataText set to: %s\n", mPostDataText.get());
++//    }
++//  }
++
+   MOZ_ASSERT(NS_IsMainThread());
+ 
+   if (!gHttpHandler->Active()) {
+@@ -6771,6 +6874,18 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   return NS_OK;
+ }
+ 
++//NS_IMETHODIMP
++//nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++//  aPostDataText = mPostDataText;
++//  return NS_OK;
++//}
++NS_IMETHODIMP
++nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  printf("GetPostDataText called, mPostDataText: %s\n", mPostDataText.get());
++  aPostDataText = NS_ConvertUTF8toUTF16(mPostDataText);
++  return NS_OK;
++}
++
+ void nsHttpChannel::AsyncOpenFinal(TimeStamp aTimeStamp) {
+   // We save this timestamp from outside of the if block in case we enable the
+   // profiler after AsyncOpen().
+diff --git a/netwerk/protocol/http/nsHttpChannel.h b/netwerk/protocol/http/nsHttpChannel.h
+index cb8b8b7406..a187bb1237 100644
+--- a/netwerk/protocol/http/nsHttpChannel.h
++++ b/netwerk/protocol/http/nsHttpChannel.h
+@@ -102,6 +102,9 @@ class nsHttpChannel final : public HttpBaseChannel,
+       nsACString& aServerResponseHeader) override;
+   NS_IMETHOD GetProxyChallenges(nsACString& aChallenges) override;
+   NS_IMETHOD GetWWWChallenges(nsACString& aChallenges) override;
++  
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   NS_IMETHOD SetProxyCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD SetWWWCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD OnAuthAvailable() override;
+@@ -849,6 +852,7 @@ class nsHttpChannel final : public HttpBaseChannel,
+   Maybe<nsCOMPtr<nsIDNSHTTPSSVCRecord>> mHTTPSSVCRecord;
+ 
+  protected:
++    nsCString mPostDataText; // ADDED: Store POST payload
+   virtual void DoNotifyListenerCleanup() override;
+ 
+   // Override ReleaseListeners() because mChannelClassifier only exists
+diff --git a/netwerk/protocol/http/nsIHttpChannel.idl b/netwerk/protocol/http/nsIHttpChannel.idl
+index a8372ba080..ff151bd5b5 100644
+--- a/netwerk/protocol/http/nsIHttpChannel.idl
++++ b/netwerk/protocol/http/nsIHttpChannel.idl
+@@ -24,6 +24,7 @@ native UniqueProfileChunkedBuffer(mozilla::UniquePtr<mozilla::ProfileChunkedBuff
+ [builtinclass, scriptable, uuid(c5a4a073-4539-49c7-a3f2-cec3f0619c6c)]
+ interface nsIHttpChannel : nsIIdentChannel
+ {
++  void getPostDataText(out AString aPostDataText);
+     /**************************************************************************
+      * REQUEST CONFIGURATION
+      *
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+index d38cc43586..29e4765597 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+@@ -19,6 +19,8 @@
+ #include "nsNetUtil.h"
+ #include "nsServiceManagerUtils.h"
+ 
++#include "nsString.h"
++
+ NS_IMPL_ADDREF(nsViewSourceChannel)
+ NS_IMPL_RELEASE(nsViewSourceChannel)
+ /*
+@@ -45,6 +47,12 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIViewSourceChannel)
+ NS_INTERFACE_MAP_END
+ 
++NS_IMETHODIMP
++nsViewSourceChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ static nsresult WillUseExternalProtocolHandler(nsIIOService* aIOService,
+                                                const char* aScheme) {
+   nsCOMPtr<nsIProtocolHandler> handler;
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.h b/netwerk/protocol/viewsource/nsViewSourceChannel.h
+index 87c490f6b7..3ba43b499a 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.h
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.h
+@@ -48,6 +48,8 @@ class nsViewSourceChannel final : public nsIViewSourceChannel,
+   NS_FORWARD_SAFE_NSIFORMPOSTACTIONCHANNEL(mPostChannel)
+   NS_FORWARD_SAFE_NSIHTTPCHANNELINTERNAL(mHttpChannelInternal)
+ 
++//  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   // nsViewSourceChannel methods:
+   nsViewSourceChannel() = default;
+ 
