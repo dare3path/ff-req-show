@@ -3744,7 +3744,7 @@ index e4479400a4..fe1fa7ed3b 100644
 +  }//if cancelled via aborted
 +
    if (mCanceled) {
-+    nsresult rv=mStatus;//some weird fail unless this.
++    nsresult rv=mStatus;//some weird fail if trying to print mStatus directly, unless done this way.
 +    printf("!!!! in nsHttpChannel::AsyncOpen after the aborted check... exiting due to mCancelled with [this=%p status=%08x]\n", this, static_cast<uint32_t>(rv));
      ReleaseListeners();
      return NS_FAILED(mStatus) ? mStatus : NS_ERROR_FAILURE;
