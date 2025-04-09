@@ -30,7 +30,7 @@ class DelayedHandler(http.server.SimpleHTTPRequestHandler):
                             headers: {
                                 'Content-Type': 'application/x-www-form-urlencoded',
                             },
-                            body: 'message=' + encodeURIComponent(message)
+                            body: 'message=\x02' + encodeURIComponent(message)
                         });
                         
                         const text = await response.text();
