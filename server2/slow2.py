@@ -3,10 +3,9 @@ import http.server
 import socketserver
 import time
 
-# a slow server (made by grok3) which replies in 5 sec, for bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1557795
 class DelayedHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        # Serve a page with a button to trigger POST
+        # Serve a page with two buttons
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
@@ -14,16 +13,17 @@ class DelayedHandler(http.server.SimpleHTTPRequestHandler):
         html = """
         <html>
             <body>
-                <h1>Delayed POST Test</h1>
+                <h1>POST Request Test</h1>
                 <input type="text" id="message" value="Test message">
-                <button onclick="sendPost()">Send POST Request</button>
+                <button onclick="sendDelayed()">Send Delayed POST (5s)</button>
+                <button onclick="sendFast()">Send Fast POST</button>
                 <div id="response"></div>
                 
                 <script>
-                    async function sendPost() {
+                    async function sendDelayed() {
                         const message = document.getElementById('message').value;
                         const responseDiv = document.getElementById('response');
-                        responseDiv.innerHTML = 'Waiting...';
+                        responseDiv.innerHTML = 'Waiting 5 seconds...';
                         
                         const response = await fetch('/', {
                             method: 'POST',
@@ -36,6 +36,23 @@ class DelayedHandler(http.server.SimpleHTTPRequestHandler):
                         const text = await response.text();
                         responseDiv.innerHTML = text;
                     }
+                    
+                    async function sendFast() {
+                        const message = document.getElementById('message').value;
+                        const responseDiv = document.getElementById('response');
+                        responseDiv.innerHTML = 'Sending fast...';
+                        
+                        const response = await fetch('/', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: 'fastmsg=\x03' + encodeURIComponent(message)
+                        });
+                        
+                        const text = await response.text();
+                        responseDiv.innerHTML = text;
+                    }
                 </script>
             </body>
         </html>
@@ -43,21 +60,24 @@ class DelayedHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(html.encode())
 
     def do_POST(self):
-        # Delay for 5 seconds
-        time.sleep(5)
-        
         # Get the POST data
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length).decode()
         
-        # Send response (just the payload for simplicity)
+        # Check if it's a delayed or fast request
+        if post_data.startswith('message='):
+            # Delayed response (5 seconds)
+            time.sleep(5)
+        # else it's fastmsg=, so no delay
+        
+        # Send response
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
         response = f"Received payload: {post_data}"
         self.wfile.write(response.encode())
 
-# Set up and run the server
+# Set up and run the server on port 8001
 PORT = 8001
 Handler = DelayedHandler
 

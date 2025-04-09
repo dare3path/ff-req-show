@@ -1,21 +1,6 @@
-This was applied on Firefox 137.0b10 in Arch Linux (firefox-developer-edition package)
-more specifically, on top of this source:
-https://archive.mozilla.org/pub/firefox/releases/137.0b10/source/firefox-137.0b10.source.tar.xz
-though on top of that it was also applied the Arch Linux patch 0001-Install-under-remoting-name.patch but it doesn't seem to affect this patch's application.
+this change ensures the Request payload is shown as formatted for in-flight unfinished-yet requests, and not just(like before) after they're finished/completed.
 
-It has all the debug outputs via dump() and printf, but dump() are only visible on terminal if about:config setting browser.dom.window.dump.enabled is true
-
-a bunch of names that have 'custom' or 'Custom' should be renamed to 'original' or 'Original', else they're confusing.
-
-custom* not yet renamed to original* but should!
-
-FIXME: original(custom)headers are being processed thus assumed to be a certain format which may miss headers. But after request completed, iirc, headers gets updated from a source that didn't do this processing (check if so).
-
-future updates should be happening here: https://github.com/dare3path/ff-req-show
-
-new changes:
-* ensures the Request payload is shown as formatted for in-flight unfinished-yet requests, and not just(like before) after they're finished/completed. FIXME: changes here may be overkill, besides I'm not really understanding what's happening here (grok3-suggested changes)
-
+custom* not yet renamed to original*
 
 diff --git a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
 index dede5f8822..c444a6439a 100644
