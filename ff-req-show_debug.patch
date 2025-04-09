@@ -16,22 +16,24 @@ future updates should be happening here: https://github.com/dare3path/ff-req-sho
 new changes:
 * ensures the Request payload is shown as formatted for in-flight unfinished-yet requests, and not just(like before) after they're finished/completed. FIXME: changes here may be overkill, besides I'm not really understanding what's happening here (grok3-suggested changes)
 
-
 diff --git a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
-index dede5f8822..c444a6439a 100644
+index dede5f8822..8c8b04b12b 100644
 --- a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
 +++ b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
-@@ -85,19 +85,23 @@ class RequestPanel extends Component {
+@@ -81,27 +81,29 @@ class RequestPanel extends Component {
+     this.toggleRawRequestPayload = this.toggleRawRequestPayload.bind(this);
+     this.renderRawRequestPayloadBtn =
+       this.renderRawRequestPayloadBtn.bind(this);
+   }
  
    componentDidMount() {
      const { request, connector } = this.props;
 -    fetchNetworkUpdatePacket(connector.requestData, request, [
 +    const updates = fetchNetworkUpdatePacket(connector.requestData, request, [
        "requestPostData",
-+      "requestHeaders",
++      "requestHeaders",//this might not be needed
      ]);
 -    updateFormDataSections(this.props);
-+    //updateFormDataSections(this.props);
 +    updates.then(() => updateFormDataSections(this.props));
    }
  
@@ -41,19 +43,43 @@ index dede5f8822..c444a6439a 100644
 -    fetchNetworkUpdatePacket(connector.requestData, request, [
 +    const updates = fetchNetworkUpdatePacket(connector.requestData, request, [
        "requestPostData",
-+      "requestHeaders",
++      "requestHeaders",//this might not be needed
      ]);
 -    updateFormDataSections(nextProps);
-+    //updateFormDataSections(nextProps);
 +    updates.then(() => updateFormDataSections(nextProps));
  
      if (nextProps.targetSearchResult !== null) {
        this.setState({
+         rawRequestPayloadDisplayed: !!nextProps.targetSearchResult,
+       });
+     }
+   }
+@@ -186,15 +188,15 @@ class RequestPanel extends Component {
+     return component(componentProps);
+   }
+ 
+   render() {
+     const { request, targetSearchResult } = this.props;
+     const { filterText, rawRequestPayloadDisplayed } = this.state;
+     const { formDataSections, mimeType, requestPostData } = request;
+-    const postData = requestPostData ? requestPostData.postData?.text : null;
++    const postData = requestPostData ? requestPostData.postData?.text : null; // orig
+ 
+     if ((!formDataSections || formDataSections.length === 0) && !postData) {
+       return div({ className: "empty-notice" }, REQUEST_EMPTY_TEXT);
+     }
+ 
+     let component;
+     let componentProps;
 diff --git a/devtools/client/netmonitor/src/components/request-list/RequestListItem.js b/devtools/client/netmonitor/src/components/request-list/RequestListItem.js
 index 5004dd5610..59b29cbe9a 100644
 --- a/devtools/client/netmonitor/src/components/request-list/RequestListItem.js
 +++ b/devtools/client/netmonitor/src/components/request-list/RequestListItem.js
-@@ -365,6 +365,10 @@ class RequestListItem extends Component {
+@@ -361,14 +361,18 @@ class RequestListItem extends Component {
+       onContextMenu,
+       onMouseDown,
+       onWaterfallMouseDown,
+       selectedActionBarTabId,
        waterfallScale,
      } = this.props;
  
@@ -64,11 +90,19 @@ index 5004dd5610..59b29cbe9a 100644
      const classList = ["request-list-item", index % 2 ? "odd" : "even"];
      isSelected && classList.push("selected");
      fromCache && classList.push("fromCache");
+     blocked && classList.push("blocked");
+ 
+     return dom.tr(
+       {
 diff --git a/devtools/client/netmonitor/src/connector/firefox-data-provider.js b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
 index 0a85eb487e..c8e65c5263 100644
 --- a/devtools/client/netmonitor/src/connector/firefox-data-provider.js
 +++ b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
-@@ -165,7 +165,7 @@ class FirefoxDataProvider {
+@@ -161,15 +161,15 @@ class FirefoxDataProvider {
+       responseCookiesObj,
+       responseCacheObj,
+     ] = await Promise.all([
+       this.fetchResponseContent(responseContent),
        this.fetchRequestHeaders(requestHeaders),
        this.fetchResponseHeaders(responseHeaders),
        this.fetchEarlyHintResponseHeaders(earlyHintsResponseHeaders),
@@ -77,7 +111,15 @@ index 0a85eb487e..c8e65c5263 100644
        this.fetchRequestCookies(requestCookies),
        this.fetchResponseCookies(responseCookies),
        this.fetchResponseCache(responseCache),
-@@ -239,25 +239,179 @@ class FirefoxDataProvider {
+     ]);
+ 
+     const payload = Object.assign(
+       {},
+@@ -235,33 +235,187 @@ class FirefoxDataProvider {
+         payload.earlyHintsResponseHeaders = headers;
+       }
+     }
+     return payload;
    }
  
    async fetchPostData(requestPostData) {
@@ -274,7 +316,15 @@ index 0a85eb487e..c8e65c5263 100644
    }
  
    async fetchRequestCookies(requestCookies) {
-@@ -650,7 +804,7 @@ class FirefoxDataProvider {
+     const payload = {};
+     if (requestCookies) {
+       const reqCookies = [];
+       // request store cookies in requestCookies or requestCookies.cookies
+@@ -646,15 +800,15 @@ class FirefoxDataProvider {
+           // Swallow errors to avoid unhandled promise rejections in tests.
+           console.warn(
+             `Firefox Data Provider destroyed while requesting data: ${e.message}`
+           );
            // Return an empty response packet to avoid too many callback errors.
            response = { from: actor };
          } else {
@@ -283,11 +333,19 @@ index 0a85eb487e..c8e65c5263 100644
              `Error while calling method ${clientMethodName}: ${e.message}`
            );
          }
+       }
+     }
+ 
+     // Restore clone actor id
 diff --git a/devtools/client/netmonitor/src/utils/request-utils.js b/devtools/client/netmonitor/src/utils/request-utils.js
 index baa3c28a29..4b4faa0fb8 100644
 --- a/devtools/client/netmonitor/src/utils/request-utils.js
 +++ b/devtools/client/netmonitor/src/utils/request-utils.js
-@@ -56,7 +56,9 @@ async function getFormDataSections(
+@@ -52,15 +52,17 @@ async function getFormDataSections(
+     return e.name.toLowerCase() == "content-type";
+   });
+ 
+   const contentTypeLongString = contentTypeHeader
      ? contentTypeHeader.value
      : "";
  
@@ -297,7 +355,15 @@ index baa3c28a29..4b4faa0fb8 100644
  
    if (contentType && contentType.includes("x-www-form-urlencoded")) {
      const postDataLongString = postData.postData.text;
-@@ -107,7 +109,8 @@ function fetchNetworkUpdatePacket(requestData, request, updateTypes) {
+     const text = await getLongString(postDataLongString);
+ 
+     for (const section of text.trim().split(/\r\n|\r|\n/)) {
+       // Before displaying it, make sure this section of the POST data
+@@ -103,15 +105,16 @@ function fetchNetworkUpdatePacket(requestData, request, updateTypes) {
+       if (updateType === "stackTrace") {
+         if (request.cause.stacktraceAvailable && !request.stacktrace) {
+           promises.push(requestData(request.id, updateType));
+         }
          return;
        }
  
@@ -307,7 +373,15 @@ index baa3c28a29..4b4faa0fb8 100644
          promises.push(requestData(request.id, updateType));
        }
      });
-@@ -563,19 +566,27 @@ async function updateFormDataSections(props) {
+   }
+ 
+   return Promise.all(promises);
+ }
+@@ -559,27 +562,35 @@ async function updateFormDataSections(props) {
+     requestHeaders,
+     requestHeadersAvailable,
+     requestHeadersFromUploadStream,
+     requestPostData,
      requestPostDataAvailable,
    } = request;
  
@@ -340,7 +414,15 @@ index baa3c28a29..4b4faa0fb8 100644
    ) {
      formDataSections = await getFormDataSections(
        requestHeaders,
-@@ -613,7 +624,7 @@ function processNetworkUpdates(update) {
+       requestHeadersFromUploadStream,
+       requestPostData,
+       connector.getLongString
+     );
+@@ -609,15 +620,15 @@ async function getMessagePayload(payload, getLongString) {
+  */
+ function processNetworkUpdates(update) {
+   const newRequest = {};
+   for (const [key, value] of Object.entries(update)) {
      if (UPDATE_PROPS.includes(key)) {
        newRequest[key] = value;
        if (key == "requestPostData") {
@@ -349,11 +431,19 @@ index baa3c28a29..4b4faa0fb8 100644
        }
      }
    }
+   return newRequest;
+ }
+ 
+ /**
 diff --git a/devtools/server/actors/network-monitor/network-event-actor.js b/devtools/server/actors/network-monitor/network-event-actor.js
 index 9e5a16ba46..9bd0dab7a6 100644
 --- a/devtools/server/actors/network-monitor/network-event-actor.js
 +++ b/devtools/server/actors/network-monitor/network-event-actor.js
-@@ -68,6 +68,11 @@ function isFileChannel(channel) {
+@@ -64,78 +64,389 @@ function isFileChannel(channel) {
+  *        - fromCache: boolean
+  *        - fromServiceWorker: boolean
+  *        - timestamp: number
+  * @param {nsIChannel} channel
   *        The channel related to this network event
   */
  class NetworkEventActor extends Actor {
@@ -365,7 +455,9 @@ index 9e5a16ba46..9bd0dab7a6 100644
    constructor(
      conn,
      sessionContext,
-@@ -77,6 +82,180 @@ class NetworkEventActor extends Actor {
+     { onNetworkEventUpdate, onNetworkEventDestroy },
+     networkEventOptions,
+     channel
    ) {
      super(conn, networkEventSpec);
  
@@ -546,7 +638,12 @@ index 9e5a16ba46..9bd0dab7a6 100644
      this._sessionContext = sessionContext;
      this._onNetworkEventUpdate = onNetworkEventUpdate;
      this._onNetworkEventDestroy = onNetworkEventDestroy;
-@@ -89,6 +268,10 @@ class NetworkEventActor extends Actor {
+ 
+     // Store the channelId which will act as resource id.
+     this._channelId = channel.channelId;
+ 
+     this._timings = {};
+     this._serverTimings = [];
  
      this._discardRequestBody = !!networkEventOptions.discardRequestBody;
      this._discardResponseBody = !!networkEventOptions.discardResponseBody;
@@ -557,7 +654,12 @@ index 9e5a16ba46..9bd0dab7a6 100644
  
      this._response = {
        headers: [],
-@@ -101,19 +284,138 @@ class NetworkEventActor extends Actor {
+       cookies: [],
+       content: {},
+     };
+ 
+     this._earlyHintsResponse = {
+       headers: [],
        rawHeaders: "",
      };
  
@@ -698,7 +800,12 @@ index 9e5a16ba46..9bd0dab7a6 100644
  
      // innerWindowId and isNavigationRequest are used to check if the actor
      // should be destroyed when a window is destroyed. See network-events.js.
-@@ -126,12 +428,21 @@ class NetworkEventActor extends Actor {
+     this._innerWindowId = lazy.NetworkUtils.getChannelInnerWindowId(channel);
+     this._isNavigationRequest = lazy.NetworkUtils.isNavigationRequest(channel);
+ 
+     // Retrieve cookies and headers from the channel
+     const { cookies, headers } =
+       lazy.NetworkUtils.fetchRequestHeadersAndCookies(channel);
  
      this._request = {
        cookies,
@@ -723,7 +830,15 @@ index 9e5a16ba46..9bd0dab7a6 100644
  
    /**
     * Return the network event actor as a resource, and add the actorID which is
-@@ -152,8 +463,20 @@ class NetworkEventActor extends Actor {
+    * not available in the constructor yet.
+    */
+   asResource() {
+     return {
+@@ -148,24 +459,36 @@ class NetworkEventActor extends Actor {
+    * Create the resource corresponding to this actor.
+    */
+   _createResource(networkEventOptions, channel) {
+     let wsChannel;
      let method;
      if (isDataChannel(channel) || isFileChannel(channel)) {
        channel.QueryInterface(Ci.nsIChannel);
@@ -744,7 +859,7 @@ index 9e5a16ba46..9bd0dab7a6 100644
      } else {
        channel = channel.QueryInterface(Ci.nsIHttpChannel);
        wsChannel = lazy.NetworkUtils.getWebSocketChannel(channel);
-@@ -161,7 +484,7 @@ class NetworkEventActor extends Actor {
+       method = channel.requestMethod;
      }
  
      // Use the WebSocket channel URL for websockets.
@@ -753,7 +868,15 @@ index 9e5a16ba46..9bd0dab7a6 100644
  
      let browsingContextID =
        lazy.NetworkUtils.getChannelBrowsingContextID(channel);
-@@ -212,6 +535,15 @@ class NetworkEventActor extends Actor {
+ 
+     // Ensure that we have a browsing context ID for all requests.
+     // Only privileged requests debugged via the Browser Toolbox (sessionContext.type == "all") can be unrelated to any browsing context.
+     if (!browsingContextID && this._sessionContext.type != "all") {
+@@ -208,14 +531,23 @@ class NetworkEventActor extends Actor {
+       blockedReason === false ||
+       blockedReason === null ||
+       blockedReason === ""
+     ) {
        blockedReason = "unknown";
      }
  
@@ -769,7 +892,15 @@ index 9e5a16ba46..9bd0dab7a6 100644
      const resource = {
        resourceId: this._channelId,
        resourceType: NETWORK_EVENT,
-@@ -237,6 +569,9 @@ class NetworkEventActor extends Actor {
+       blockedReason,
+       blockingExtension: networkEventOptions.blockingExtension,
+       browsingContextID,
+       cause,
+@@ -233,14 +565,17 @@ class NetworkEventActor extends Actor {
+       referrerPolicy: lazy.NetworkUtils.getReferrerPolicy(channel),
+       stacktraceResourceId,
+       startedDateTime: new Date(timeStamp).toISOString(),
+       securityFlags: channel.loadInfo.securityFlags,
        timeStamp,
        timings: {},
        url,
@@ -779,7 +910,15 @@ index 9e5a16ba46..9bd0dab7a6 100644
      };
  
      return resource;
-@@ -284,7 +619,7 @@ class NetworkEventActor extends Actor {
+   }
+ 
+   /**
+    * Releases this actor from the pool.
+@@ -280,22 +615,24 @@ class NetworkEventActor extends Actor {
+     let rawHeaders;
+     let headersSize = 0;
+     if (this._request.rawHeaders) {
+       headersSize = this._request.rawHeaders.length;
        rawHeaders = this._createLongStringActor(this._request.rawHeaders);
      }
  
@@ -788,7 +927,7 @@ index 9e5a16ba46..9bd0dab7a6 100644
        headers: this._request.headers.map(header => ({
          name: header.name,
          value: this._createLongStringActor(header.value),
-@@ -292,6 +627,8 @@ class NetworkEventActor extends Actor {
+       })),
        headersSize,
        rawHeaders,
      };
@@ -797,7 +936,15 @@ index 9e5a16ba46..9bd0dab7a6 100644
    }
  
    /**
-@@ -315,20 +652,83 @@ class NetworkEventActor extends Actor {
+    * The "getRequestCookies" packet type handler.
+    *
+    * @return object
+    *         The response packet - network request cookies.
+@@ -311,28 +648,91 @@ class NetworkEventActor extends Actor {
+ 
+   /**
+    * The "getRequestPostData" packet type handler.
+    *
     * @return object
     *         The response packet - network POST data.
     */
@@ -893,11 +1040,19 @@ index 9e5a16ba46..9bd0dab7a6 100644
    }
  
    /**
+    * The "getSecurityInfo" packet type handler.
+    *
+    * @return object
+    *         The response packet - connection security information.
 diff --git a/devtools/server/actors/resources/network-events.js b/devtools/server/actors/resources/network-events.js
 index ff38ed13a1..5e66cb3654 100644
 --- a/devtools/server/actors/resources/network-events.js
 +++ b/devtools/server/actors/resources/network-events.js
-@@ -284,7 +284,7 @@ class NetworkEventWatcher {
+@@ -280,28 +280,48 @@ class NetworkEventWatcher {
+   onNetworkEvent(networkEventOptions, channel) {
+     if (channel.channelId && this.networkEvents.has(channel.channelId)) {
+       throw new Error(
+         `Got notified about channel ${channel.channelId} more than once.`
        );
      }
  
@@ -906,7 +1061,13 @@ index ff38ed13a1..5e66cb3654 100644
        this.watcherActor.conn,
        this.watcherActor.sessionContext,
        {
-@@ -298,6 +298,26 @@ class NetworkEventWatcher {
+         onNetworkEventUpdate: this.onNetworkEventUpdate.bind(this),
+         onNetworkEventDestroy: this.onNetworkEventDestroy.bind(this),
+       },
+       networkEventOptions,
+       channel
+     );
+     this.pool.manage(actor);
  
      const resource = actor.asResource();
      const isBlocked = !!resource.blockedReason;
@@ -933,7 +1094,15 @@ index ff38ed13a1..5e66cb3654 100644
      const networkEvent = {
        browsingContextID: resource.browsingContextID,
        innerWindowId: resource.innerWindowId,
-@@ -313,9 +333,15 @@ class NetworkEventWatcher {
+       resourceId: resource.resourceId,
+       isBlocked,
+       receivedUpdates: [],
+       resourceUpdates: {
+@@ -309,17 +329,23 @@ class NetworkEventWatcher {
+         // should always be considered as available. But the client still
+         // heavily relies on those `Available` flags to fetch additional data,
+         // so it is better to keep them for consistency.
+         requestCookiesAvailable: true,
          requestHeadersAvailable: true,
        },
      };
@@ -951,11 +1120,19 @@ index ff38ed13a1..5e66cb3654 100644
  
      // Blocked requests will not receive further updates and should emit an
      // update packet immediately.
+     // The frontend expects to receive a dedicated update to consider the
+     // request as completed. TODO: lift this restriction so that we can only
+     // emit a resource available notification if no update is needed.
+     if (isBlocked) {
 diff --git a/devtools/shared/network-observer/NetworkObserver.sys.mjs b/devtools/shared/network-observer/NetworkObserver.sys.mjs
 index 6fba6e866a..0699bb16a1 100644
 --- a/devtools/shared/network-observer/NetworkObserver.sys.mjs
 +++ b/devtools/shared/network-observer/NetworkObserver.sys.mjs
-@@ -307,25 +307,30 @@ export class NetworkObserver {
+@@ -303,83 +303,144 @@ export class NetworkObserver {
+   /**
+    * Observes for http-on-failed-opening-request notification to catch any
+    * channels for which asyncOpen has synchronously failed.  This is the only
+    * place to catch early security check failures.
     */
    #httpFailedOpening = DevToolsInfaillibleUtils.makeInfallible(
      (subject, topic) => {
@@ -986,7 +1163,9 @@ index 6fba6e866a..0699bb16a1 100644
          return;
        }
  
-@@ -335,24 +340,51 @@ export class NetworkObserver {
+       this.#httpResponseExaminer(subject, topic);
+     }
+   );
  
    #httpBeforeConnect = DevToolsInfaillibleUtils.makeInfallible(
      (subject, topic) => {
@@ -1040,7 +1219,9 @@ index 6fba6e866a..0699bb16a1 100644
  
        // Handle overrides in http-on-before-connect because we need to redirect
        // the request to the override before reaching the server.
-@@ -362,20 +394,49 @@ export class NetworkObserver {
+       this.#checkForContentOverride(httpActivity);
+     }
+   );
  
    #httpStopRequest = DevToolsInfaillibleUtils.makeInfallible(
      (subject, topic) => {
@@ -1090,7 +1271,15 @@ index 6fba6e866a..0699bb16a1 100644
  
        const httpActivity = this.#createOrGetActivityObject(channel);
        if (httpActivity.owner) {
-@@ -400,6 +461,7 @@ export class NetworkObserver {
+         // Try extracting server timings. Note that they will be sent to the client
+         // in the `_onTransactionClose` method together with network event timings.
+         const serverTimings = NetworkTimings.extractServerTimings(httpActivity);
+         httpActivity.owner.addServerTimings(serverTimings);
+@@ -396,14 +457,15 @@ export class NetworkObserver {
+         this.#createNetworkEvent(httpActivity, {
+           inProgressRequest: true,
+         });
+       } else {
          // Handles any early blockings e.g by Web Extensions or by CORS
          const { blockingExtension, blockedReason } =
            lazy.NetworkUtils.getBlockedReason(channel, httpActivity.fromCache);
@@ -1098,7 +1287,15 @@ index 6fba6e866a..0699bb16a1 100644
          this.#createNetworkEvent(httpActivity, {
            blockedReason,
            blockingExtension,
-@@ -569,18 +631,23 @@ export class NetworkObserver {
+         });
+       }
+     }
+   );
+@@ -565,26 +627,31 @@ export class NetworkObserver {
+    * the nsIObserverService.
+    *
+    * @private
+    * @param nsIHttpChannel aSubject
     * @returns void
     */
    #httpModifyExaminer = DevToolsInfaillibleUtils.makeInfallible(subject => {
@@ -1122,7 +1319,15 @@ index 6fba6e866a..0699bb16a1 100644
      }
    });
  
-@@ -935,10 +1002,12 @@ export class NetworkObserver {
+   #dataChannelExaminer = DevToolsInfaillibleUtils.makeInfallible(
+     (subject, topic) => {
+       if (
+         topic != "data-channel-opened" ||
+@@ -931,18 +998,20 @@ export class NetworkObserver {
+    * - Set a few attributes on file activity object
+    * - Register listener to record response content
+    */
+   #createNetworkEvent(
      httpActivity,
      { timestamp, blockedReason, blockingExtension, inProgressRequest } = {}
    ) {
@@ -1135,7 +1340,15 @@ index 6fba6e866a..0699bb16a1 100644
        // Check the request URL with ones manually blocked by the user in DevTools.
        // If it's meant to be blocked, we cancel the request and annotate the event.
        httpActivity.channel.cancel(Cr.NS_BINDING_ABORTED);
-@@ -955,6 +1024,26 @@ export class NetworkObserver {
+       blockedReason = "devtools";
+     }
+ 
+     httpActivity.owner = this.#onNetworkEvent(
+@@ -951,26 +1020,47 @@ export class NetworkObserver {
+         blockedReason,
+         blockingExtension,
+         discardRequestBody: !this.#saveRequestAndResponseBodies,
+         discardResponseBody: !this.#saveRequestAndResponseBodies,
        },
        httpActivity.channel
      );
@@ -1162,7 +1375,12 @@ index 6fba6e866a..0699bb16a1 100644
  
      // Bug 1489217 - Avoid watching for response content for blocked or in-progress requests
      // as it can't be observed and would throw if we try.
-@@ -967,6 +1056,7 @@ export class NetworkObserver {
+     if (blockedReason === undefined && !inProgressRequest) {
+       this.#setupResponseListener(httpActivity);
+     }
+ 
+     const wrapper = ChannelWrapper.get(httpActivity.channel);
+     if (this.#authPromptListenerEnabled && !wrapper.hasNetworkAuthListener) {
        new lazy.NetworkAuthListener(httpActivity.channel, httpActivity.owner);
        wrapper.hasNetworkAuthListener = true;
      }
@@ -1170,11 +1388,19 @@ index 6fba6e866a..0699bb16a1 100644
    }
  
    /**
+    * Handler for ACTIVITY_SUBTYPE_REQUEST_HEADER. When a request starts the
+    * headers are sent to the server. This method creates the |httpActivity|
+    * object where we store the request and response information that is
+    * collected through its lifetime.
 diff --git a/ipc/glue/BackgroundUtils.cpp b/ipc/glue/BackgroundUtils.cpp
 index 0f3f2976e2..28b8ac89f7 100644
 --- a/ipc/glue/BackgroundUtils.cpp
 +++ b/ipc/glue/BackgroundUtils.cpp
-@@ -554,6 +554,24 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+@@ -550,14 +550,32 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+       aLoadInfo->GetOverriddenFingerprintingSettings();
+ 
+   if (overriddenFingerprintingSettings) {
+     overriddenFingerprintingSettingsArg =
          Some(overriddenFingerprintingSettings.ref());
    }
  
@@ -1199,7 +1425,15 @@ index 0f3f2976e2..28b8ac89f7 100644
    *outLoadInfoArgs = LoadInfoArgs(
        loadingPrincipalInfo, triggeringPrincipalInfo, principalToInheritInfo,
        topLevelPrincipalInfo, optionalResultPrincipalURI, triggeringRemoteType,
-@@ -603,7 +621,12 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+       aLoadInfo->GetSandboxedNullPrincipalID(), aLoadInfo->GetSecurityFlags(),
+       aLoadInfo->GetSandboxFlags(), aLoadInfo->GetTriggeringSandboxFlags(),
+       aLoadInfo->GetTriggeringWindowId(),
+       aLoadInfo->GetTriggeringStorageAccess(),
+@@ -599,15 +617,20 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+       aLoadInfo->GetIsMediaRequest(), aLoadInfo->GetIsMediaInitialRequest(),
+       aLoadInfo->GetIsFromObjectOrEmbed(), cookieJarSettingsArgs,
+       aLoadInfo->GetRequestBlockingReason(), maybeCspToInheritInfo,
+       aLoadInfo->GetStoragePermission(), overriddenFingerprintingSettingsArg,
        aLoadInfo->GetIsMetaRefresh(), aLoadInfo->GetLoadingEmbedderPolicy(),
        aLoadInfo->GetIsOriginTrialCoepCredentiallessEnabledForTopLevel(),
        unstrippedURI, interceptionInfoArg, aLoadInfo->GetIsNewWindowTarget(),
@@ -1213,7 +1447,15 @@ index 0f3f2976e2..28b8ac89f7 100644
  
    return NS_OK;
  }
-@@ -901,6 +924,26 @@ nsresult LoadInfoArgsToLoadInfo(const LoadInfoArgs& loadInfoArgs,
+ 
+ nsresult LoadInfoArgsToLoadInfo(const LoadInfoArgs& aLoadInfoArgs,
+                                 const nsACString& aOriginRemoteType,
+                                 nsILoadInfo** outLoadInfo) {
+@@ -897,14 +920,34 @@ nsresult LoadInfoArgsToLoadInfo(const LoadInfoArgs& loadInfoArgs,
+       loadInfoArgs.originTrialCoepCredentiallessEnabledForTopLevel(),
+       loadInfoArgs.unstrippedURI(), interceptionInfo,
+       loadInfoArgs.hasInjectedCookieForCookieBannerHandling(),
+       loadInfoArgs.schemelessInput(), loadInfoArgs.httpsUpgradeTelemetry(),
        loadInfoArgs.isNewWindowTarget(),
        loadInfoArgs.userNavigationInvolvement());
  
@@ -1240,7 +1482,15 @@ index 0f3f2976e2..28b8ac89f7 100644
    if (loadInfoArgs.isFromProcessingFrameAttributes()) {
      loadInfo->SetIsFromProcessingFrameAttributes();
    }
-@@ -964,6 +1007,25 @@ void LoadInfoToParentLoadInfoForwarder(
+ 
+   if (loadInfoArgs.isMediaRequest()) {
+     loadInfo->SetIsMediaRequest(true);
+ 
+@@ -960,14 +1003,33 @@ void LoadInfoToParentLoadInfoForwarder(
+       aLoadInfo->GetOverriddenFingerprintingSettings();
+ 
+   if (overriddenFingerprintingSettings) {
+     overriddenFingerprintingSettingsArg =
          Some(overriddenFingerprintingSettings.ref());
    }
  
@@ -1266,7 +1516,15 @@ index 0f3f2976e2..28b8ac89f7 100644
    *aForwarderArgsOut = ParentLoadInfoForwarderArgs(
        aLoadInfo->GetAllowInsecureRedirectToDataURI(), ipcController, tainting,
        aLoadInfo->GetSkipContentSniffing(), aLoadInfo->GetHttpsOnlyStatus(),
-@@ -983,7 +1045,12 @@ void LoadInfoToParentLoadInfoForwarder(
+       aLoadInfo->GetSchemelessInput(), aLoadInfo->GetHttpsUpgradeTelemetry(),
+       aLoadInfo->GetHstsStatus(), aLoadInfo->GetHasValidUserGestureActivation(),
+       aLoadInfo->GetTextDirectiveUserActivation(),
+       aLoadInfo->GetAllowDeprecatedSystemRequests(),
+@@ -979,15 +1041,20 @@ void LoadInfoToParentLoadInfoForwarder(
+       aLoadInfo->GetDocumentHasUserInteracted(),
+       aLoadInfo->GetAllowListFutureDocumentsCreatedFromThisRedirectChain(),
+       cookieJarSettingsArgs, aLoadInfo->GetContainerFeaturePolicyInfo(),
+       aLoadInfo->GetRequestBlockingReason(), aLoadInfo->GetStoragePermission(),
        overriddenFingerprintingSettingsArg, aLoadInfo->GetIsMetaRefresh(),
        isThirdPartyContextToTopWindow, aLoadInfo->GetIsInThirdPartyContext(),
        aLoadInfo->GetIsOn3PCBExceptionList(), unstrippedURI,
@@ -1280,7 +1538,15 @@ index 0f3f2976e2..28b8ac89f7 100644
  }
  
  nsresult MergeParentLoadInfoForwarder(
-@@ -1114,6 +1181,51 @@ nsresult MergeParentLoadInfoForwarder(
+     ParentLoadInfoForwarderArgs const& aForwarderArgs, nsILoadInfo* aLoadInfo) {
+   nsresult rv;
+ 
+   rv = aLoadInfo->SetAllowInsecureRedirectToDataURI(
+@@ -1110,14 +1177,59 @@ nsresult MergeParentLoadInfoForwarder(
+     aLoadInfo->SetContainerFeaturePolicyInfo(
+         *aForwarderArgs.containerFeaturePolicyInfo());
+   }
+ 
    aLoadInfo->SetUserNavigationInvolvement(
        uint8_t(aForwarderArgs.userNavigationInvolvement()));
  
@@ -1332,11 +1598,19 @@ index 0f3f2976e2..28b8ac89f7 100644
    return NS_OK;
  }
  
+ void LoadInfoToChildLoadInfoForwarder(
+     nsILoadInfo* aLoadInfo, ChildLoadInfoForwarderArgs* aForwarderArgsOut) {
+   Maybe<IPCClientInfo> ipcReserved;
+   Maybe<ClientInfo> reserved(aLoadInfo->GetReservedClientInfo());
 diff --git a/netwerk/base/LoadInfo.cpp b/netwerk/base/LoadInfo.cpp
 index 1ec2c64193..b01212a546 100644
 --- a/netwerk/base/LoadInfo.cpp
 +++ b/netwerk/base/LoadInfo.cpp
-@@ -48,6 +48,9 @@
+@@ -44,14 +44,17 @@
+ #include "nsDocShell.h"
+ #include "nsGlobalWindowInner.h"
+ #include "nsMixedContentBlocker.h"
+ #include "nsQueryObject.h"
  #include "nsRedirectHistoryEntry.h"
  #include "nsSandboxFlags.h"
  #include "nsICookieService.h"
@@ -1346,7 +1620,15 @@ index 1ec2c64193..b01212a546 100644
  
  using namespace mozilla::dom;
  
-@@ -103,6 +106,39 @@ static nsContentPolicyType InternalContentPolicyTypeForFrame(
+ namespace mozilla::net {
+ 
+ static nsCString CurrentRemoteType() {
+   MOZ_ASSERT(XRE_IsParentProcess() || XRE_IsContentProcess());
+@@ -99,14 +102,47 @@ static nsContentPolicyType InternalContentPolicyTypeForFrame(
+     nsContentPolicyType aContentPolicyType, nsSecurityFlags aSecurityFlags,
+     uint32_t aSandboxFlags) {
+   return MakeAndAddRef<LoadInfo>(
+       aParentWGP, aTriggeringPrincipal, aParentWGP->GetRemoteType(),
        aContentPolicyType, aSecurityFlags, aSandboxFlags);
  }
  
@@ -1386,7 +1668,15 @@ index 1ec2c64193..b01212a546 100644
  LoadInfo::LoadInfo(
      nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
      nsINode* aLoadingContext, nsSecurityFlags aSecurityFlags,
-@@ -121,7 +157,12 @@ LoadInfo::LoadInfo(
+     nsContentPolicyType aContentPolicyType,
+     const Maybe<mozilla::dom::ClientInfo>& aLoadingClientInfo,
+     const Maybe<mozilla::dom::ServiceWorkerDescriptor>& aController,
+     uint32_t aSandboxFlags)
+@@ -117,15 +153,20 @@ LoadInfo::LoadInfo(
+       mTriggeringRemoteType(CurrentRemoteType()),
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mClientInfo(aLoadingClientInfo),
+       mController(aController),
        mLoadingContext(do_GetWeakReference(aLoadingContext)),
        mSecurityFlags(aSecurityFlags),
        mSandboxFlags(aSandboxFlags),
@@ -1400,7 +1690,15 @@ index 1ec2c64193..b01212a546 100644
    MOZ_ASSERT(mLoadingPrincipal);
    MOZ_ASSERT(mTriggeringPrincipal);
  
-@@ -334,7 +375,12 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow, nsIURI* aURI,
+ #ifdef DEBUG
+   // TYPE_DOCUMENT loads initiated by javascript tests will go through
+   // nsIOService and use the wrong constructor.  Don't enforce the
+   // !TYPE_DOCUMENT check in those cases
+@@ -330,15 +371,20 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow, nsIURI* aURI,
+                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
+     : mTriggeringPrincipal(aTriggeringPrincipal),
+       mTriggeringRemoteType(CurrentRemoteType()),
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
        mContextForTopLevelLoad(do_GetWeakReference(aContextForTopLevelLoad)),
        mSecurityFlags(aSecurityFlags),
        mSandboxFlags(aSandboxFlags),
@@ -1414,7 +1712,15 @@ index 1ec2c64193..b01212a546 100644
    // Top-level loads are never third-party
    // Grab the information we can out of the window.
    MOZ_ASSERT(aOuterWindow);
-@@ -399,7 +445,12 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
+   MOZ_ASSERT(mTriggeringPrincipal);
+ 
+   // if the load is sandboxed, we can not also inherit the principal
+   if (mSandboxFlags & SANDBOXED_ORIGIN) {
+@@ -395,15 +441,20 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
+                    const OriginAttributes& aOriginAttributes,
+                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
+     : mTriggeringPrincipal(aTriggeringPrincipal),
+       mTriggeringRemoteType(aTriggeringRemoteType),
        mSandboxedNullPrincipalID(nsID::GenerateUUID()),
        mSecurityFlags(aSecurityFlags),
        mSandboxFlags(aSandboxFlags),
@@ -1428,7 +1734,15 @@ index 1ec2c64193..b01212a546 100644
    // Top-level loads are never third-party
    // Grab the information we can out of the window.
    MOZ_ASSERT(aBrowsingContext);
-@@ -492,7 +543,12 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
+   MOZ_ASSERT(mTriggeringPrincipal);
+   MOZ_ASSERT(aSecurityFlags !=
+              nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK);
+ 
+@@ -488,15 +539,20 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
+                    nsContentPolicyType aContentPolicyType,
+                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
+     : mTriggeringPrincipal(aTriggeringPrincipal),
+       mTriggeringRemoteType(aTriggeringRemoteType),
        mSandboxedNullPrincipalID(nsID::GenerateUUID()),
        mSecurityFlags(aSecurityFlags),
        mSandboxFlags(aSandboxFlags),
@@ -1442,7 +1756,15 @@ index 1ec2c64193..b01212a546 100644
    CanonicalBrowsingContext* parentBC = aParentWGP->BrowsingContext();
    MOZ_ASSERT(parentBC);
    ComputeAncestors(parentBC, mAncestorPrincipals, mAncestorBrowsingContextIDs);
-@@ -696,7 +752,12 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
+ 
+   RefPtr<WindowGlobalParent> topLevelWGP = aParentWGP->TopWindowContext();
+ 
+   // if the load is sandboxed, we can not also inherit the principal
+@@ -692,15 +748,20 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
+           rhs.mIsOriginTrialCoepCredentiallessEnabledForTopLevel),
+       mUnstrippedURI(rhs.mUnstrippedURI),
+       mInterceptionInfo(rhs.mInterceptionInfo),
+       mHasInjectedCookieForCookieBannerHandling(
            rhs.mHasInjectedCookieForCookieBannerHandling),
        mSchemelessInput(rhs.mSchemelessInput),
        mHttpsUpgradeTelemetry(rhs.mHttpsUpgradeTelemetry),
@@ -1456,7 +1778,15 @@ index 1ec2c64193..b01212a546 100644
  }
  
  LoadInfo::LoadInfo(
-@@ -834,7 +895,12 @@ LoadInfo::LoadInfo(
+     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
+     nsIPrincipal* aPrincipalToInherit, nsIPrincipal* aTopLevelPrincipal,
+     nsIURI* aResultPrincipalURI, nsICookieJarSettings* aCookieJarSettings,
+     nsIContentSecurityPolicy* aCspToInherit,
+@@ -830,15 +891,20 @@ LoadInfo::LoadInfo(
+       mUnstrippedURI(aUnstrippedURI),
+       mInterceptionInfo(aInterceptionInfo),
+       mHasInjectedCookieForCookieBannerHandling(
+           aHasInjectedCookieForCookieBannerHandling),
        mSchemelessInput(aSchemelessInput),
        mHttpsUpgradeTelemetry(aHttpsUpgradeTelemetry),
        mUserNavigationInvolvement(aUserNavigationInvolvement),
@@ -1470,7 +1800,15 @@ index 1ec2c64193..b01212a546 100644
    // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
    MOZ_ASSERT(mLoadingPrincipal ||
               aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT);
-@@ -898,8 +964,94 @@ NS_IMPL_ISUPPORTS(LoadInfo, nsILoadInfo)
+   MOZ_ASSERT(mTriggeringPrincipal);
+ }
+ 
+ // static
+@@ -894,16 +960,102 @@ void LoadInfo::ComputeIsThirdPartyContext(dom::WindowGlobalParent* aGlobal) {
+   thirdPartyUtil->IsThirdPartyGlobal(aGlobal, &mIsThirdPartyContext);
+ }
+ 
+ NS_IMPL_ISUPPORTS(LoadInfo, nsILoadInfo)
  
  LoadInfo::~LoadInfo() { MOZ_RELEASE_ASSERT(NS_IsMainThread()); }
  
@@ -1565,11 +1903,19 @@ index 1ec2c64193..b01212a546 100644
    return copy.forget();
  }
  
+ already_AddRefed<nsILoadInfo> LoadInfo::CloneWithNewSecFlags(
+     nsSecurityFlags aSecurityFlags) const {
+   RefPtr<LoadInfo> copy(new LoadInfo(*this));
+   copy->mSecurityFlags = aSecurityFlags;
 diff --git a/netwerk/base/LoadInfo.h b/netwerk/base/LoadInfo.h
 index 93cc8d3630..43dad5914b 100644
 --- a/netwerk/base/LoadInfo.h
 +++ b/netwerk/base/LoadInfo.h
-@@ -66,6 +66,7 @@ class LoadInfo final : public nsILoadInfo {
+@@ -62,14 +62,15 @@ class LoadInfo final : public nsILoadInfo {
+   template <typename T, typename... Args>
+   friend already_AddRefed<T> mozilla::MakeAndAddRef(Args&&... aArgs);
+ 
+  public:
    NS_DECL_ISUPPORTS
    NS_DECL_NSILOADINFO
  
@@ -1577,7 +1923,15 @@ index 93cc8d3630..43dad5914b 100644
    // Used for TYPE_DOCUMENT load.
    static already_AddRefed<LoadInfo> CreateForDocument(
        dom::CanonicalBrowsingContext* aBrowsingContext, nsIURI* aURI,
-@@ -426,6 +427,10 @@ class LoadInfo final : public nsILoadInfo {
+       nsIPrincipal* aTriggeringPrincipal,
+       const nsACString& aTriggeringRemoteType,
+       const OriginAttributes& aOriginAttributes, nsSecurityFlags aSecurityFlags,
+       uint32_t aSandboxFlags);
+@@ -422,14 +423,18 @@ class LoadInfo final : public nsILoadInfo {
+       nsILoadInfo::NOT_INITIALIZED;
+ 
+   dom::UserNavigationInvolvement mUserNavigationInvolvement =
+       dom::UserNavigationInvolvement::None;
  
    bool mIsNewWindowTarget = false;
    bool mSkipHTTPSUpgrade = false;
@@ -1588,11 +1942,19 @@ index 93cc8d3630..43dad5914b 100644
  };
  
  // This is exposed solely for testing purposes and should not be used outside of
+ // LoadInfo
+ already_AddRefed<nsIPrincipal> CreateTruncatedPrincipal(nsIPrincipal*);
+ 
+ }  // namespace net
 diff --git a/netwerk/base/TRRLoadInfo.cpp b/netwerk/base/TRRLoadInfo.cpp
 index d1650595f8..d48604c20b 100644
 --- a/netwerk/base/TRRLoadInfo.cpp
 +++ b/netwerk/base/TRRLoadInfo.cpp
-@@ -5,6 +5,9 @@
+@@ -1,14 +1,17 @@
+ /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+ /* vim: set ts=8 sts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  #include "TRRLoadInfo.h"
@@ -1602,7 +1964,15 @@ index d1650595f8..d48604c20b 100644
  #include "mozilla/dom/ClientSource.h"
  #include "mozilla/dom/FeaturePolicy.h"
  #include "mozilla/dom/DOMTypes.h"
-@@ -21,12 +24,61 @@ NS_IMPL_ISUPPORTS(TRRLoadInfo, nsILoadInfo)
+ #include "nsContentUtils.h"
+ #include "nsIRedirectHistoryEntry.h"
+ 
+ using namespace mozilla::dom;
+@@ -17,20 +20,69 @@ namespace mozilla {
+ namespace net {
+ 
+ NS_IMPL_ISUPPORTS(TRRLoadInfo, nsILoadInfo)
+ 
  TRRLoadInfo::TRRLoadInfo(nsIURI* aResultPrincipalURI,
                           nsContentPolicyType aContentPolicyType)
      : mResultPrincipalURI(aResultPrincipalURI),
@@ -1665,7 +2035,15 @@ index d1650595f8..d48604c20b 100644
    return loadInfo.forget();
  }
  
-@@ -950,5 +1002,49 @@ TRRLoadInfo::GetFetchDestination(nsACString& aDestination) {
+ NS_IMETHODIMP
+ TRRLoadInfo::GetLoadingPrincipal(nsIPrincipal** aLoadingPrincipal) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+@@ -946,9 +998,53 @@ TRRLoadInfo::SetSkipHTTPSUpgrade(bool aSkipHTTPSUpgrade) {
+ }
+ 
+ NS_IMETHODIMP
+ TRRLoadInfo::GetFetchDestination(nsACString& aDestination) {
    return NS_ERROR_NOT_IMPLEMENTED;
  }
  
@@ -1719,7 +2097,11 @@ diff --git a/netwerk/base/TRRLoadInfo.h b/netwerk/base/TRRLoadInfo.h
 index 25f588c96f..dc54ab3c42 100644
 --- a/netwerk/base/TRRLoadInfo.h
 +++ b/netwerk/base/TRRLoadInfo.h
-@@ -31,6 +31,7 @@ class TRRLoadInfo final : public nsILoadInfo {
+@@ -27,14 +27,15 @@ class TRRLoadInfo final : public nsILoadInfo {
+ 
+   TRRLoadInfo(nsIURI* aResultPrincipalURI,
+               nsContentPolicyType aContentPolicyType);
+ 
    already_AddRefed<nsILoadInfo> Clone() const;
  
   private:
@@ -1727,7 +2109,15 @@ index 25f588c96f..dc54ab3c42 100644
    virtual ~TRRLoadInfo() = default;
  
    nsCOMPtr<nsIURI> mResultPrincipalURI;
-@@ -46,6 +47,10 @@ class TRRLoadInfo final : public nsILoadInfo {
+   nsContentPolicyType mInternalContentPolicyType;
+   OriginAttributes mOriginAttributes;
+   nsTArray<nsCOMPtr<nsIRedirectHistoryEntry>> mEmptyRedirectChain;
+   nsTArray<nsCOMPtr<nsIPrincipal>> mEmptyPrincipals;
+@@ -42,13 +43,17 @@ class TRRLoadInfo final : public nsILoadInfo {
+   nsTArray<nsCString> mCorsUnsafeHeaders;
+   nsID mSandboxedNullPrincipalID;
+   Maybe<mozilla::dom::ClientInfo> mClientInfo;
+   Maybe<mozilla::dom::ClientInfo> mReservedClientInfo;
    Maybe<mozilla::dom::ClientInfo> mInitialClientInfo;
    Maybe<mozilla::dom::ServiceWorkerDescriptor> mController;
    Maybe<RFPTargetSet> mOverriddenFingerprintingSettings;
@@ -1738,11 +2128,18 @@ index 25f588c96f..dc54ab3c42 100644
  };
  
  }  // namespace net
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_TRRLoadInfo_h
 diff --git a/netwerk/base/nsILoadInfo.idl b/netwerk/base/nsILoadInfo.idl
 index 774ec045c0..bd97838edc 100644
 --- a/netwerk/base/nsILoadInfo.idl
 +++ b/netwerk/base/nsILoadInfo.idl
-@@ -72,7 +72,10 @@ typedef unsigned long nsSecurityFlags;
+@@ -68,15 +68,18 @@ typedef unsigned long nsSecurityFlags;
+  * was started, and how we plan on using the resulting response.
+  * If a network request is redirected, the new channel will receive a new
+  * LoadInfo object. The new object will contain mostly the same
+  * information as the pre-redirect one, but updated as appropriate.
   * For detailed information about what parts of LoadInfo are updated on
   * redirect, see documentation on individual properties.
   */
@@ -1754,7 +2151,15 @@ index 774ec045c0..bd97838edc 100644
  interface nsILoadInfo : nsISupports
  {
    /**
-@@ -260,6 +263,7 @@ interface nsILoadInfo : nsISupports
+    * The following five flags determine the security mode and hence what kind of
+    * security checks should be performed throughout the lifetime of the channel.
+    *
+    *    * SEC_REQUIRE_SAME_ORIGIN_INHERITS_SEC_CONTEXT
+@@ -256,14 +259,15 @@ interface nsILoadInfo : nsISupports
+    * content principals, then we will always call into
+    * nsIContentPolicies and CheckLoadURI. The call to nsIContentPolicies
+    * and CheckLoadURI happen even if the URI to be loaded is same-origin
+    * with the loadingPrincipal or triggeringPrincipal.
     */
    readonly attribute nsIPrincipal loadingPrincipal;
  
@@ -1762,7 +2167,15 @@ index 774ec045c0..bd97838edc 100644
    /**
     * A C++-friendly version of triggeringPrincipal.
     *
-@@ -1626,4 +1630,11 @@ interface nsILoadInfo : nsISupports
+    * This is a bit awkward because we can't use
+    * binaryname(GetLoadingPrincipal).
+    */
+   [noscript, notxpcom, nostdcall]
+@@ -1622,8 +1626,15 @@ interface nsILoadInfo : nsISupports
+       uint8_t userNavigationInvolvement = 0;
+       mozilla::DebugOnly<nsresult> rv = GetUserNavigationInvolvement(&userNavigationInvolvement);
+       MOZ_ASSERT(NS_SUCCEEDED(rv));
+       MOZ_DIAGNOSTIC_ASSERT(userNavigationInvolvement < 3);
        return static_cast<mozilla::dom::UserNavigationInvolvement>(userNavigationInvolvement);
      }
  %}
@@ -1778,7 +2191,11 @@ diff --git a/netwerk/ipc/NeckoChannelParams.ipdlh b/netwerk/ipc/NeckoChannelPara
 index 0924673e59..6a1731639a 100644
 --- a/netwerk/ipc/NeckoChannelParams.ipdlh
 +++ b/netwerk/ipc/NeckoChannelParams.ipdlh
-@@ -204,6 +204,11 @@ struct LoadInfoArgs
+@@ -200,14 +200,19 @@ struct LoadInfoArgs
+   bool                        isMetaRefresh;
+   CrossOriginEmbedderPolicy   loadingEmbedderPolicy;
+   bool                        originTrialCoepCredentiallessEnabledForTopLevel;
+   nullable nsIURI             unstrippedURI;
    InterceptionInfoArg?        interceptionInfo;
    bool                        isNewWindowTarget;
    UserNavigationInvolvement   userNavigationInvolvement;
@@ -1790,7 +2207,15 @@ index 0924673e59..6a1731639a 100644
  };
  
  /**
-@@ -301,6 +306,10 @@ struct ParentLoadInfoForwarderArgs
+  * This structure is used to carry selected properties of a LoadInfo
+  * object to child processes to merge LoadInfo changes from the parent
+  * process.  We don't want to use LoadInfoArgs for that since it's
+  * too huge and we only care about small subpart of properties anyway.
+@@ -297,14 +302,18 @@ struct ParentLoadInfoForwarderArgs
+ 
+   bool isOn3PCBExceptionList;
+ 
+   nullable nsIURI unstrippedURI;
  
    UserNavigationInvolvement userNavigationInvolvement;
  
@@ -1801,11 +2226,19 @@ index 0924673e59..6a1731639a 100644
    // IMPORTANT: when you add new properites here you must also update
    // LoadInfoToParentLoadInfoForwarder and MergeParentLoadInfoForwarder
    // in BackgroundUtils.cpp/.h!
+ };
+ 
+ /**
+  * This structure is used to carry selected properties of a LoadInfo
 diff --git a/netwerk/protocol/data/DataChannelChild.cpp b/netwerk/protocol/data/DataChannelChild.cpp
 index a85895cb14..792a5c988b 100644
 --- a/netwerk/protocol/data/DataChannelChild.cpp
 +++ b/netwerk/protocol/data/DataChannelChild.cpp
-@@ -30,9 +30,30 @@ DataChannelChild::DataChannelChild(nsIURI* aURI)
+@@ -26,17 +26,38 @@ DataChannelChild::DataChannelChild(nsIURI* aURI)
+     // IPC now has a ref to us.
+     mIPCOpen = true;
+   }
+ }
  
  NS_IMETHODIMP
  DataChannelChild::ConnectParent(uint32_t aId) {
@@ -1837,11 +2270,19 @@ index a85895cb14..792a5c988b 100644
    return NS_OK;
  }
  
+ NS_IMETHODIMP
+ DataChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+   nsresult rv;
+   rv = AsyncOpen(aListener);
 diff --git a/netwerk/protocol/http/HttpBaseChannel.h b/netwerk/protocol/http/HttpBaseChannel.h
 index ae1eeafd9f..a634e52d00 100644
 --- a/netwerk/protocol/http/HttpBaseChannel.h
 +++ b/netwerk/protocol/http/HttpBaseChannel.h
-@@ -1163,6 +1163,8 @@ template <class T>
+@@ -1159,14 +1159,16 @@ class HttpAsyncAborter {
+ };
+ 
+ template <class T>
+ [[nodiscard]] nsresult HttpAsyncAborter<T>::AsyncAbort(nsresult status) {
    MOZ_LOG(gHttpLog, LogLevel::Debug,
            ("HttpAsyncAborter::AsyncAbort [this=%p status=%" PRIx32 "]\n", mThis,
             static_cast<uint32_t>(status)));
@@ -1850,11 +2291,19 @@ index ae1eeafd9f..a634e52d00 100644
  
    mThis->mStatus = status;
  
+   // if this fails?  Callers ignore our return value anyway....
+   return AsyncCall(&T::HandleAsyncAbort);
+ }
+ 
 diff --git a/netwerk/protocol/http/HttpChannelChild.cpp b/netwerk/protocol/http/HttpChannelChild.cpp
 index 5a38d5a035..167bbd466d 100644
 --- a/netwerk/protocol/http/HttpChannelChild.cpp
 +++ b/netwerk/protocol/http/HttpChannelChild.cpp
-@@ -68,6 +68,8 @@
+@@ -64,14 +64,16 @@
+ #include "nsRedirectHistoryEntry.h"
+ #include "nsSocketTransportService2.h"
+ #include "nsStreamUtils.h"
+ #include "nsThreadUtils.h"
  #include "nsCORSListenerProxy.h"
  #include "nsIOService.h"
  
@@ -1863,7 +2312,15 @@ index 5a38d5a035..167bbd466d 100644
  #include <functional>
  
  using namespace mozilla::dom;
-@@ -155,6 +157,22 @@ HttpChannelChild::~HttpChannelChild() {
+ using namespace mozilla::ipc;
+ 
+ namespace mozilla::net {
+ 
+@@ -151,14 +153,30 @@ HttpChannelChild::~HttpChannelChild() {
+ #endif
+ 
+   mEventQ->NotifyReleasingOwner();
+ 
    ReleaseMainThreadOnlyReferences();
  }
  
@@ -1886,7 +2343,15 @@ index 5a38d5a035..167bbd466d 100644
  void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
    if (NS_IsMainThread()) {
      // Already on main thread, let dtor to
-@@ -1520,6 +1538,36 @@ mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect1Begin(
+     // take care of releasing references
+     return;
+   }
+ 
+@@ -1516,14 +1534,44 @@ mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect1Begin(
+     const uint32_t& aNewLoadFlags, const uint32_t& aRedirectFlags,
+     const ParentLoadInfoForwarderArgs& aLoadInfoForwarder,
+     nsHttpResponseHead&& aResponseHead, nsITransportSecurityInfo* aSecurityInfo,
+     const uint64_t& aChannelId, const NetAddr& aOldPeerAddr,
      const ResourceTimingStructArgs& aTiming) {
    // TODO: handle security info
    LOG(("HttpChannelChild::RecvRedirect1Begin [this=%p]\n", this));
@@ -1923,7 +2388,15 @@ index 5a38d5a035..167bbd466d 100644
    // We set peer address of child to the old peer,
    // Then it will be updated to new peer in OnStartRequest
    mPeerAddr = aOldPeerAddr;
-@@ -1544,8 +1592,10 @@ nsresult HttpChannelChild::SetupRedirect(nsIURI* uri,
+ 
+   // Cookies headers should not be visible to the child process
+   MOZ_ASSERT(!nsHttpResponseHead(aResponseHead).HasHeader(nsHttp::Set_Cookie));
+ 
+@@ -1540,27 +1588,55 @@ mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect1Begin(
+ }
+ 
+ nsresult HttpChannelChild::SetupRedirect(nsIURI* uri,
+                                          const nsHttpResponseHead* responseHead,
                                           const uint32_t& redirectFlags,
                                           nsIChannel** outChannel) {
    LOG(("HttpChannelChild::SetupRedirect [this=%p]\n", this));
@@ -1934,7 +2407,8 @@ index 5a38d5a035..167bbd466d 100644
      return NS_ERROR_ABORT;
    }
  
-@@ -1554,9 +1604,35 @@ nsresult HttpChannelChild::SetupRedirect(nsIURI* uri,
+   nsresult rv;
+   nsCOMPtr<nsIIOService> ioService;
    rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
    NS_ENSURE_SUCCESS(rv, rv);
  
@@ -1970,7 +2444,15 @@ index 5a38d5a035..167bbd466d 100644
    rv = NS_NewChannelInternal(getter_AddRefs(newChannel), uri, redirectLoadInfo,
                               nullptr,  // PerformanceStorage
                               nullptr,  // aLoadGroup
-@@ -1589,6 +1665,8 @@ void HttpChannelChild::Redirect1Begin(
+                              nullptr,  // aCallbacks
+                              nsIRequest::LOAD_NORMAL, ioService);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
+@@ -1585,14 +1661,16 @@ void HttpChannelChild::Redirect1Begin(
+     const ParentLoadInfoForwarderArgs& loadInfoForwarder,
+     const nsHttpResponseHead& responseHead,
+     nsITransportSecurityInfo* securityInfo, const uint64_t& channelId,
+     const ResourceTimingStructArgs& timing) {
    nsresult rv;
  
    LOG(("HttpChannelChild::Redirect1Begin [this=%p]\n", this));
@@ -1979,7 +2461,15 @@ index 5a38d5a035..167bbd466d 100644
  
    MOZ_ASSERT(newOriginalURI, "newOriginalURI should not be null");
  
-@@ -1622,6 +1700,57 @@ void HttpChannelChild::Redirect1Begin(
+   ipc::MergeParentLoadInfoForwarder(loadInfoForwarder, mLoadInfo);
+   ResourceTimingStructArgsToTimingsStruct(timing, mTransactionTimings);
+ 
+   if (profiler_thread_is_being_profiled_for_markers()) {
+@@ -1618,33 +1696,169 @@ void HttpChannelChild::Redirect1Begin(
+   nsCOMPtr<nsIChannel> newChannel;
+   rv = SetupRedirect(newOriginalURI, &responseHead, redirectFlags,
+                      getter_AddRefs(newChannel));
+ 
    if (NS_SUCCEEDED(rv)) {
      MOZ_ALWAYS_SUCCEEDS(newChannel->SetLoadFlags(newLoadFlags));
  
@@ -2037,7 +2527,8 @@ index 5a38d5a035..167bbd466d 100644
      if (mRedirectChannelChild) {
        // Set the channelId allocated in parent to the child instance
        nsCOMPtr<nsIHttpChannel> httpChannel =
-@@ -1630,17 +1759,102 @@ void HttpChannelChild::Redirect1Begin(
+           do_QueryInterface(mRedirectChannelChild);
+       if (httpChannel) {
          rv = httpChannel->SetChannelId(channelId);
          MOZ_ASSERT(NS_SUCCEEDED(rv));
        }
@@ -2143,7 +2634,15 @@ index 5a38d5a035..167bbd466d 100644
  }
  
  mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect3Complete() {
-@@ -1818,6 +2032,8 @@ NS_IMETHODIMP
+   LOG(("HttpChannelChild::RecvRedirect3Complete [this=%p]\n", this));
+   nsCOMPtr<nsIChannel> redirectChannel =
+       do_QueryInterface(mRedirectChannelChild);
+   MOZ_ASSERT(redirectChannel);
+@@ -1814,29 +2028,33 @@ void HttpChannelChild::CleanupRedirectingChannel(nsresult rv) {
+ // HttpChannelChild::nsIChildChannel
+ //-----------------------------------------------------------------------------
+ 
+ NS_IMETHODIMP
  HttpChannelChild::ConnectParent(uint32_t registrarId) {
    LOG(("HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this,
         registrarId));
@@ -2152,7 +2651,10 @@ index 5a38d5a035..167bbd466d 100644
    MOZ_ASSERT(NS_IsMainThread());
    mozilla::dom::BrowserChild* browserChild = nullptr;
    nsCOMPtr<nsIBrowserChild> iBrowserChild;
-@@ -1828,11 +2044,13 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   GetCallback(iBrowserChild);
+   if (iBrowserChild) {
+     browserChild =
+         static_cast<mozilla::dom::BrowserChild*>(iBrowserChild.get());
    }
  
    if (browserChild && !browserChild->IPCOpen()) {
@@ -2166,7 +2668,15 @@ index 5a38d5a035..167bbd466d 100644
      return NS_ERROR_FAILURE;
    }
  
-@@ -1853,6 +2071,7 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   HttpBaseChannel::SetDocshellUserAgentOverride();
+ 
+   // This must happen before the constructor message is sent. Otherwise messages
+   // from the parent could arrive quickly and be delivered to the wrong event
+@@ -1849,14 +2067,15 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+       mBrowserId = bc->BrowserId();
+     }
+   }
+ 
    HttpChannelConnectArgs connectArgs(registrarId);
    if (!gNeckoChild->SendPHttpChannelConstructor(
            this, browserChild, IPC::SerializedLoadContext(this), connectArgs)) {
@@ -2174,7 +2684,15 @@ index 5a38d5a035..167bbd466d 100644
      return NS_ERROR_FAILURE;
    }
  
-@@ -1879,6 +2098,8 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   {
+     MutexAutoLock lock(mBgChildMutex);
+ 
+     MOZ_ASSERT(!mBgChild);
+@@ -1875,14 +2094,16 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+     nsresult rv = gSocketTransportService->Dispatch(
+         NewRunnableMethod<RefPtr<HttpChannelChild>>(
+             "HttpBackgroundChannelChild::Init", bgChild,
+             &HttpBackgroundChannelChild::Init, std::move(self)),
          NS_DISPATCH_NORMAL);
  
      if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -2183,7 +2701,15 @@ index 5a38d5a035..167bbd466d 100644
        return rv;
      }
  
-@@ -1894,8 +2115,44 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+     mBgChild = std::move(bgChild);
+ #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+     mEverHadBgChildAtConnectParent = true;
+ #endif
+@@ -1890,16 +2111,52 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+ 
+   // Should wait for CompleteRedirectSetup to set the listener.
+   mEventQ->Suspend();
+   MOZ_ASSERT(!mSuspendForWaitCompleteRedirectSetup);
    mSuspendForWaitCompleteRedirectSetup = true;
  
    // Connect to socket process after mEventQ is suspended.
@@ -2228,7 +2754,15 @@ index 5a38d5a035..167bbd466d 100644
    return NS_OK;
  }
  
-@@ -1953,6 +2210,7 @@ HttpChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+ NS_IMETHODIMP
+ HttpChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+   LOG(("HttpChannelChild::CompleteRedirectSetup [this=%p]\n", this));
+   MOZ_ASSERT(NS_IsMainThread());
+@@ -1949,14 +2206,15 @@ HttpChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+ //-----------------------------------------------------------------------------
+ // HttpChannelChild::nsIAsyncVerifyRedirectCallback
+ //-----------------------------------------------------------------------------
+ 
  NS_IMETHODIMP
  HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
    LOG(("HttpChannelChild::OnRedirectVerifyCallback [this=%p]\n", this));
@@ -2236,7 +2770,15 @@ index 5a38d5a035..167bbd466d 100644
    MOZ_ASSERT(NS_IsMainThread());
    nsCOMPtr<nsIURI> redirectURI;
  
-@@ -1969,6 +2227,7 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+   DebugOnly<nsresult> rv = NS_OK;
+ 
+   nsCOMPtr<nsIHttpChannel> newHttpChannel =
+       do_QueryInterface(mRedirectChannelChild);
+@@ -1965,14 +2223,15 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+     // mRedirectChannelChild doesn't exist means we're redirecting to a protocol
+     // that doesn't implement nsIChildChannel. The redirect result should be set
+     // as failed by veto listeners and shouldn't enter this condition. As the
+     // last resort, we synthesize the error result as NS_ERROR_DOM_BAD_URI here
      // to let nsHttpChannel::ContinueProcessResponse2 know it's redirecting to
      // another protocol and throw an error.
      LOG(("  redirecting to a protocol that doesn't implement nsIChildChannel"));
@@ -2244,7 +2786,15 @@ index 5a38d5a035..167bbd466d 100644
      aResult = NS_ERROR_DOM_BAD_URI;
    }
  
-@@ -1995,6 +2254,41 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+   nsCOMPtr<nsIReferrerInfo> referrerInfo;
+   if (newHttpChannel) {
+     // Must not be called until after redirect observers called.
+     newHttpChannel->SetOriginalURI(mOriginalURI);
+@@ -1991,14 +2250,49 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+     rv = newHttpChannelChild->GetClientSetRequestHeaders(&headerTuples);
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+     newHttpChannelChild->GetClientSetCorsPreflightParameters(corsPreflightArgs);
    }
  
    if (NS_SUCCEEDED(aResult)) {
@@ -2286,11 +2836,19 @@ index 5a38d5a035..167bbd466d 100644
      // Note: this is where we would notify "http-on-modify-response" observers.
      // We have deliberately disabled this for child processes (see bug 806753)
      //
+     // After we verify redirect, nsHttpChannel may hit the network: must give
+     // "http-on-modify-request" observers the chance to cancel before that.
+     // base->CallOnModifyRequestObservers();
+ 
 diff --git a/netwerk/protocol/http/HttpChannelChild.h b/netwerk/protocol/http/HttpChannelChild.h
 index c952065b91..0be12bddac 100644
 --- a/netwerk/protocol/http/HttpChannelChild.h
 +++ b/netwerk/protocol/http/HttpChannelChild.h
-@@ -75,6 +75,8 @@ class HttpChannelChild final : public PHttpChannelChild,
+@@ -71,14 +71,16 @@ class HttpChannelChild final : public PHttpChannelChild,
+   NS_DECL_NSIHTTPCHANNELCHILD
+   NS_DECL_NSIMULTIPARTCHANNEL
+   NS_DECL_NSITHREADRETARGETABLEREQUEST
+   NS_DECLARE_STATIC_IID_ACCESSOR(HTTP_CHANNEL_CHILD_IID)
  
    HttpChannelChild();
  
@@ -2299,11 +2857,19 @@ index c952065b91..0be12bddac 100644
    // Methods HttpBaseChannel didn't implement for us or that we override.
    //
    // nsIRequest
+   NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
+   NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+   NS_IMETHOD CancelWithReason(nsresult status,
+                               const nsACString& reason) override;
 diff --git a/netwerk/protocol/http/HttpChannelParent.cpp b/netwerk/protocol/http/HttpChannelParent.cpp
 index 03ec882a2d..9fd1cd04d4 100644
 --- a/netwerk/protocol/http/HttpChannelParent.cpp
 +++ b/netwerk/protocol/http/HttpChannelParent.cpp
-@@ -1802,7 +1802,22 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+@@ -1798,15 +1798,30 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   mRedirectChannelId = nsContentUtils::GenerateLoadIdentifier();
+   rv = registrar->RegisterChannel(newChannel, mRedirectChannelId);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
    LOG(("Registered %p channel under id=%" PRIx64, newChannel,
         mRedirectChannelId));
  
@@ -2326,7 +2892,15 @@ index 03ec882a2d..9fd1cd04d4 100644
      return NS_BINDING_ABORTED;
    }
  
-@@ -1867,6 +1882,20 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   // If this is an internal redirect for service worker interception or
+   // internal redirect due to auth retries, then hide it from the child
+   // process.  The original e10s interception code was not designed with this
+   // in mind and its not necessary to replace the HttpChannelChild/Parent
+@@ -1863,14 +1878,28 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+       NS_ENSURE_SUCCESS(rv, rv);
+       MOZ_ASSERT(linkedChannel == newChannel);
+ 
+       // We immediately store the channel as our nested mChannel.
        // None of the redirect IPC messaging takes place.
        mChannel = do_QueryObject(newChannel);
  
@@ -2347,7 +2921,15 @@ index 03ec882a2d..9fd1cd04d4 100644
        callback->OnRedirectVerifyCallback(NS_OK);
        return NS_OK;
      }
-@@ -1915,12 +1944,27 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   }
+ 
+   // Sending down the original URI, because that is the URI we have
+   // to construct the channel from - this is the URI we've been actually
+@@ -1911,28 +1940,44 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   }
+ 
+   if (!responseHead) {
+     responseHead = &cleanedUpResponseHead;
    }
  
    if (!mIPCClosed) {
@@ -2375,7 +2957,8 @@ index 03ec882a2d..9fd1cd04d4 100644
        return NS_BINDING_ABORTED;
      }
    }
-@@ -1929,6 +1973,7 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+ 
+   // Result is handled in RecvRedirect2Verify above
  
    mRedirectChannel = newChannel;
    mRedirectCallback = callback;
@@ -2383,11 +2966,19 @@ index 03ec882a2d..9fd1cd04d4 100644
    return NS_OK;
  }
  
+ NS_IMETHODIMP
+ HttpChannelParent::CompleteRedirect(nsresult status) {
+   LOG(("HttpChannelParent::CompleteRedirect [this=%p status=0x%X]\n", this,
+        static_cast<uint32_t>(status)));
 diff --git a/netwerk/protocol/http/InterceptedHttpChannel.cpp b/netwerk/protocol/http/InterceptedHttpChannel.cpp
 index fbf4bdf1e2..b486b660fe 100644
 --- a/netwerk/protocol/http/InterceptedHttpChannel.cpp
 +++ b/netwerk/protocol/http/InterceptedHttpChannel.cpp
-@@ -21,6 +21,8 @@
+@@ -17,14 +17,16 @@
+ #include "nsIHttpHeaderVisitor.h"
+ #include "nsIRedirectResultListener.h"
+ #include "nsStringStream.h"
+ #include "nsStreamUtils.h"
  #include "nsQueryObject.h"
  #include "mozilla/Logging.h"
  
@@ -2396,7 +2987,15 @@ index fbf4bdf1e2..b486b660fe 100644
  namespace mozilla::net {
  
  mozilla::LazyLogModule gInterceptedLog("Intercepted");
-@@ -69,6 +71,12 @@ void InterceptedHttpChannel::ReleaseListeners() {
+ 
+ #define INTERCEPTED_LOG(args) MOZ_LOG(gInterceptedLog, LogLevel::Debug, args)
+ 
+ NS_IMPL_ISUPPORTS_INHERITED(InterceptedHttpChannel, HttpBaseChannel,
+@@ -65,14 +67,20 @@ void InterceptedHttpChannel::ReleaseListeners() {
+   mProgressSink = nullptr;
+   mBodyCallback = nullptr;
+   mPump = nullptr;
+ 
    MOZ_DIAGNOSTIC_ASSERT(!LoadIsPending());
  }
  
@@ -2409,11 +3008,19 @@ index fbf4bdf1e2..b486b660fe 100644
  nsresult InterceptedHttpChannel::SetupReplacementChannel(
      nsIURI* aURI, nsIChannel* aChannel, bool aPreserveMethod,
      uint32_t aRedirectFlags) {
+   INTERCEPTED_LOG(
+       ("InterceptedHttpChannel::SetupReplacementChannel [%p] flag: %u", this,
+        aRedirectFlags));
+   nsresult rv = HttpBaseChannel::SetupReplacementChannel(
 diff --git a/netwerk/protocol/http/InterceptedHttpChannel.h b/netwerk/protocol/http/InterceptedHttpChannel.h
 index 704404c9f0..8d9bcdfd83 100644
 --- a/netwerk/protocol/http/InterceptedHttpChannel.h
 +++ b/netwerk/protocol/http/InterceptedHttpChannel.h
-@@ -221,6 +221,7 @@ class InterceptedHttpChannel final
+@@ -217,14 +217,15 @@ class InterceptedHttpChannel final
+ 
+   void MaybeCallBodyCallback();
+ 
+   TimeStamp mServiceWorkerLaunchStart;
    TimeStamp mServiceWorkerLaunchEnd;
  
   public:
@@ -2421,11 +3028,19 @@ index 704404c9f0..8d9bcdfd83 100644
    static already_AddRefed<InterceptedHttpChannel> CreateForInterception(
        PRTime aCreationTime, const TimeStamp& aCreationTimestamp,
        const TimeStamp& aAsyncOpenTimestamp);
+ 
+   static already_AddRefed<InterceptedHttpChannel> CreateForSynthesis(
+       const nsHttpResponseHead* aHead, nsIInputStream* aBody,
+       nsIInterceptedBodyCallback* aBodyCallback, PRTime aCreationTime,
 diff --git a/netwerk/protocol/http/NullHttpChannel.cpp b/netwerk/protocol/http/NullHttpChannel.cpp
 index 1038ba82df..147da42fb9 100644
 --- a/netwerk/protocol/http/NullHttpChannel.cpp
 +++ b/netwerk/protocol/http/NullHttpChannel.cpp
-@@ -7,6 +7,7 @@
+@@ -3,14 +3,15 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "NullHttpChannel.h"
+ #include "nsContentUtils.h"
  #include "nsContentSecurityManager.h"
  #include "nsIScriptSecurityManager.h"
  #include "nsIStreamListener.h"
@@ -2433,7 +3048,15 @@ index 1038ba82df..147da42fb9 100644
  
  namespace mozilla {
  namespace net {
-@@ -57,6 +58,12 @@ NullHttpChannel::GetChannelId(uint64_t* aChannelId) {
+ 
+ NS_IMPL_ISUPPORTS(NullHttpChannel, nsINullChannel, nsIChannel, nsIHttpChannel,
+                   nsIIdentChannel, nsITimedChannel)
+ 
+@@ -53,14 +54,20 @@ nsresult NullHttpChannel::Init(nsIURI* aURI, uint32_t aCaps,
+ //-----------------------------------------------------------------------------
+ 
+ NS_IMETHODIMP
+ NullHttpChannel::GetChannelId(uint64_t* aChannelId) {
    return NS_ERROR_NOT_IMPLEMENTED;
  }
  
@@ -2446,11 +3069,19 @@ index 1038ba82df..147da42fb9 100644
  NS_IMETHODIMP
  NullHttpChannel::SetChannelId(uint64_t aChannelId) {
    return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
+ NS_IMETHODIMP
+ NullHttpChannel::GetTopLevelContentWindowId(uint64_t* aWindowId) {
 diff --git a/netwerk/protocol/http/NullHttpChannel.h b/netwerk/protocol/http/NullHttpChannel.h
 index 478d13e0a2..8689951ee0 100644
 --- a/netwerk/protocol/http/NullHttpChannel.h
 +++ b/netwerk/protocol/http/NullHttpChannel.h
-@@ -56,6 +56,8 @@ class NullHttpChannel final : public nsINullChannel,
+@@ -52,13 +52,15 @@ class NullHttpChannel final : public nsINullChannel,
+   PRTime mChannelCreationTime;
+   TimeStamp mAsyncOpenTime;
+   TimeStamp mChannelCreationTimestamp;
+   nsCOMPtr<nsIPrincipal> mResourcePrincipal;
    nsCString mTimingAllowOriginHeader;
    bool mAllRedirectsSameOrigin{false};
    bool mAllRedirectsPassTimingAllowCheck{false};
@@ -2459,11 +3090,18 @@ index 478d13e0a2..8689951ee0 100644
  };
  
  }  // namespace net
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_net_NullHttpChannel_h
 diff --git a/netwerk/protocol/http/ObliviousHttpChannel.cpp b/netwerk/protocol/http/ObliviousHttpChannel.cpp
 index 8b7059426c..7a47772b86 100644
 --- a/netwerk/protocol/http/ObliviousHttpChannel.cpp
 +++ b/netwerk/protocol/http/ObliviousHttpChannel.cpp
-@@ -13,6 +13,7 @@
+@@ -9,14 +9,15 @@
+ #include "HttpLog.h"
+ 
+ #include "ObliviousHttpChannel.h"
+ 
  #include "BinaryHttpRequest.h"
  #include "nsIHttpHeaderVisitor.h"
  #include "nsStringStream.h"
@@ -2471,7 +3109,15 @@ index 8b7059426c..7a47772b86 100644
  
  namespace mozilla::net {
  
-@@ -35,6 +36,12 @@ ObliviousHttpChannel::ObliviousHttpChannel(
+ NS_IMPL_ISUPPORTS(ObliviousHttpChannel, nsIChannel, nsIHttpChannel,
+                   nsIObliviousHttpChannel, nsIHttpChannelInternal,
+                   nsIIdentChannel, nsIRequest, nsIRequestObserver,
+                   nsIStreamListener, nsIUploadChannel2, nsITimedChannel)
+@@ -31,14 +32,20 @@ ObliviousHttpChannel::ObliviousHttpChannel(
+       mInnerChannelTimed(do_QueryInterface(innerChannel)) {
+   LOG(("ObliviousHttpChannel ctor [this=%p]", this));
+   MOZ_ASSERT(mInnerChannel);
+   MOZ_ASSERT(mInnerChannelInternal);
    MOZ_ASSERT(mInnerChannelTimed);
  }
  
@@ -2484,11 +3130,19 @@ index 8b7059426c..7a47772b86 100644
  ObliviousHttpChannel::~ObliviousHttpChannel() {
    LOG(("ObliviousHttpChannel dtor [this=%p]", this));
  }
+ 
+ //-----------------------------------------------------------------------------
+ // ObliviousHttpChannel::nsIHttpChannel
+ //-----------------------------------------------------------------------------
 diff --git a/netwerk/protocol/http/ObliviousHttpChannel.h b/netwerk/protocol/http/ObliviousHttpChannel.h
 index 9dc9c9f689..df1315e492 100644
 --- a/netwerk/protocol/http/ObliviousHttpChannel.h
 +++ b/netwerk/protocol/http/ObliviousHttpChannel.h
-@@ -34,6 +34,7 @@ class ObliviousHttpChannel final : public nsIObliviousHttpChannel,
+@@ -30,14 +30,15 @@ class ObliviousHttpChannel final : public nsIObliviousHttpChannel,
+   NS_DECL_NSICHANNEL
+   NS_DECL_NSIHTTPCHANNEL
+   NS_DECL_NSIOBLIVIOUSHTTPCHANNEL
+   NS_DECL_NSIREQUESTOBSERVER
    NS_DECL_NSISTREAMLISTENER
    NS_DECL_NSIUPLOADCHANNEL2
  
@@ -2496,11 +3150,19 @@ index 9dc9c9f689..df1315e492 100644
    ObliviousHttpChannel(nsIURI* targetURI,
                         const nsTArray<uint8_t>& encodedConfig,
                         nsIHttpChannel* innerChannel);
+ 
+   NS_FORWARD_SAFE_NSIREQUEST(mInnerChannel)
+   NS_FORWARD_SAFE_NSIIDENTCHANNEL(mInnerChannel)
+   NS_FORWARD_SAFE_NSIHTTPCHANNELINTERNAL(mInnerChannelInternal)
 diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
 index 58094fa024..97f4185a6e 100644
 --- a/netwerk/protocol/http/TRRServiceChannel.cpp
 +++ b/netwerk/protocol/http/TRRServiceChannel.cpp
-@@ -30,6 +30,8 @@
+@@ -26,14 +26,16 @@
+ #include "nsURLHelper.h"
+ #include "ProxyConfigLookup.h"
+ #include "TRRLoadInfo.h"
+ #include "ReferrerInfo.h"
  #include "TRR.h"
  #include "TRRService.h"
  
@@ -2509,7 +3171,15 @@ index 58094fa024..97f4185a6e 100644
  namespace mozilla::net {
  
  NS_IMPL_ADDREF(TRRServiceChannel)
-@@ -50,6 +52,12 @@ bool TRRServiceChannel::DispatchRelease() {
+ 
+ // Because nsSupportsWeakReference isn't thread-safe we must ensure that
+ // TRRServiceChannel is destroyed on the target thread. Any Release() called
+ // on a different thread is dispatched to the target thread.
+@@ -46,14 +48,20 @@ bool TRRServiceChannel::DispatchRelease() {
+       NewNonOwningRunnableMethod("net::TRRServiceChannel::Release", this,
+                                  &TRRServiceChannel::Release),
+       NS_DISPATCH_NORMAL);
+ 
    return true;
  }
  
@@ -2522,11 +3192,19 @@ index 58094fa024..97f4185a6e 100644
  NS_IMETHODIMP_(MozExternalRefCountType)
  TRRServiceChannel::Release() {
    nsrefcnt count = mRefCnt - 1;
+   if (DispatchRelease()) {
+     // Redispatched to the target thread.
+     return count;
+   }
 diff --git a/netwerk/protocol/http/TRRServiceChannel.h b/netwerk/protocol/http/TRRServiceChannel.h
 index d9365a592a..5b7e6b4911 100644
 --- a/netwerk/protocol/http/TRRServiceChannel.h
 +++ b/netwerk/protocol/http/TRRServiceChannel.h
-@@ -47,6 +47,7 @@ class TRRServiceChannel : public HttpBaseChannel,
+@@ -43,14 +43,15 @@ class TRRServiceChannel : public HttpBaseChannel,
+   NS_DECL_NSIREQUESTOBSERVER
+   NS_DECL_NSISTREAMLISTENER
+   NS_DECL_NSITRANSPORTEVENTSINK
+   NS_DECL_NSIPROXIEDCHANNEL
    NS_DECL_NSIPROTOCOLPROXYCALLBACK
    NS_DECLARE_STATIC_IID_ACCESSOR(NS_TRRSERVICECHANNEL_IID)
  
@@ -2534,11 +3212,19 @@ index d9365a592a..5b7e6b4911 100644
    // nsIRequest
    NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
    NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+   NS_IMETHOD CancelWithReason(nsresult status,
+                               const nsACString& reason) override;
+   NS_IMETHOD Cancel(nsresult status) override;
+   NS_IMETHOD Suspend() override;
 diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
 index e4479400a4..fe1fa7ed3b 100644
 --- a/netwerk/protocol/http/nsHttpChannel.cpp
 +++ b/netwerk/protocol/http/nsHttpChannel.cpp
-@@ -144,6 +144,18 @@
+@@ -140,14 +140,26 @@
+ #ifdef XP_MACOSX
+ #  include "MicrosoftEntraSSOUtils.h"
+ #endif
+ #ifdef FUZZING
  #  include "mozilla/StaticPrefs_fuzzing.h"
  #endif
  
@@ -2557,7 +3243,15 @@ index e4479400a4..fe1fa7ed3b 100644
  namespace mozilla {
  
  using namespace dom;
-@@ -3442,6 +3454,7 @@ void nsHttpChannel::HandleAsyncRedirectToUnstrippedURI() {
+ 
+ namespace net {
+ 
+ namespace {
+@@ -3438,14 +3450,15 @@ void nsHttpChannel::HandleAsyncRedirectToUnstrippedURI() {
+       LOG(("ContinueAsyncRedirectChannelToURI failed (%08x) [this=%p]\n",
+            static_cast<uint32_t>(rv), this));
+     }
+   }
  }
  nsresult nsHttpChannel::RedirectToNewChannelForAuthRetry() {
    LOG(("nsHttpChannel::RedirectToNewChannelForAuthRetry %p", this));
@@ -2565,7 +3259,15 @@ index e4479400a4..fe1fa7ed3b 100644
    nsresult rv = NS_OK;
  
    nsCOMPtr<nsILoadInfo> redirectLoadInfo = CloneLoadInfoForRedirect(
-@@ -3552,11 +3565,38 @@ nsresult nsHttpChannel::StartRedirectChannelToURI(nsIURI* upgradedURI,
+       mURI, nsIChannelEventSink::REDIRECT_INTERNAL |
+                 nsIChannelEventSink::REDIRECT_AUTH_RETRY);
+ 
+   nsCOMPtr<nsIIOService> ioService;
+@@ -3548,34 +3561,79 @@ nsresult nsHttpChannel::RedirectToNewChannelForAuthRetry() {
+ 
+   return rv;
+ }
+ nsresult nsHttpChannel::StartRedirectChannelToURI(nsIURI* upgradedURI,
                                                    uint32_t flags) {
    nsresult rv = NS_OK;
    LOG(("nsHttpChannel::StartRedirectChannelToURI()\n"));
@@ -2604,7 +3306,12 @@ index e4479400a4..fe1fa7ed3b 100644
    nsCOMPtr<nsIIOService> ioService;
    rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
    NS_ENSURE_SUCCESS(rv, rv);
-@@ -3569,9 +3609,27 @@ nsresult nsHttpChannel::StartRedirectChannelToURI(nsIURI* upgradedURI,
+ 
+   rv = NS_NewChannelInternal(getter_AddRefs(newChannel), upgradedURI,
+                              redirectLoadInfo,
+                              nullptr,  // PerformanceStorage
+                              nullptr,  // aLoadGroup
+                              nullptr,  // aCallbacks
                               nsIRequest::LOAD_NORMAL, ioService);
    NS_ENSURE_SUCCESS(rv, rv);
  
@@ -2632,7 +3339,15 @@ index e4479400a4..fe1fa7ed3b 100644
    if (mHTTPSSVCRecord) {
      RefPtr<nsHttpChannel> httpChan = do_QueryObject(newChannel);
      nsCOMPtr<nsIDNSHTTPSSVCRecord> rec = mHTTPSSVCRecord.ref();
-@@ -5231,6 +5289,7 @@ nsresult nsHttpChannel::ReadFromCache(void) {
+     if (httpChan && rec) {
+       httpChan->SetHTTPSSVCRecord(rec.forget());
+     }
+   }
+@@ -5227,14 +5285,15 @@ nsresult nsHttpChannel::ReadFromCache(void) {
+       LOG(("First response from cache"));
+       PROFILER_MARKER_TEXT(
+           "RCWN", NETWORK, {},
+           nsPrintfCString("Cache won for %s (%p)", mSpec.get(), this));
        mFirstResponseSource = RESPONSE_FROM_CACHE;
  
        // Cancel the transaction because we will serve the request from the cache
@@ -2640,7 +3355,15 @@ index e4479400a4..fe1fa7ed3b 100644
        CancelNetworkRequest(NS_BINDING_ABORTED);
        if (mTransactionPump && mSuspendCount) {
          uint32_t suspendCount = mSuspendCount;
-@@ -6003,6 +6062,7 @@ nsresult nsHttpChannel::AsyncProcessRedirection(uint32_t redirectType) {
+         while (suspendCount--) {
+           mTransactionPump->Resume();
+         }
+       }
+@@ -5999,14 +6058,15 @@ nsresult nsHttpChannel::AsyncProcessRedirection(uint32_t redirectType) {
+     return NS_ERROR_FAILURE;
+   }
+ 
+   return ContinueProcessRedirectionAfterFallback(NS_OK);
  }
  
  nsresult nsHttpChannel::ContinueProcessRedirectionAfterFallback(nsresult rv) {
@@ -2648,7 +3371,15 @@ index e4479400a4..fe1fa7ed3b 100644
    // Kill the current cache entry if we are redirecting
    // back to ourself.
    bool redirectingBackToSameURI = false;
-@@ -6282,6 +6342,8 @@ nsHttpChannel::Cancel(nsresult status) {
+   if (mCacheEntry && LoadCacheEntryIsWriteOnly() &&
+       NS_SUCCEEDED(mURI->Equals(mRedirectURI, &redirectingBackToSameURI)) &&
+       redirectingBackToSameURI) {
+     mCacheEntry->AsyncDoom(nullptr);
+@@ -6278,14 +6338,16 @@ nsHttpChannel::Cancel(nsresult status) {
+                             " need to be handled by CancelByURLClassifier()",
+                             static_cast<uint32_t>(status));
+   }
+ #endif
  
    LOG(("nsHttpChannel::Cancel [this=%p status=%" PRIx32 ", reason=%s]\n", this,
         static_cast<uint32_t>(status), mCanceledReason.get()));
@@ -2657,7 +3388,15 @@ index e4479400a4..fe1fa7ed3b 100644
    MOZ_ASSERT_IF(!(mConnectionInfo && mConnectionInfo->UsingConnect()) &&
                      NS_SUCCEEDED(mStatus),
                  !AllowedErrorForHTTPSRRFallback(status));
-@@ -6383,6 +6445,7 @@ void nsHttpChannel::ContinueCancellingByURLClassifier(nsresult aErrorCode) {
+ 
+   mEarlyHintObserver = nullptr;
+   mWebTransportSessionEventListener = nullptr;
+ 
+@@ -6379,14 +6441,15 @@ void nsHttpChannel::ContinueCancellingByURLClassifier(nsresult aErrorCode) {
+   }
+ 
+   Unused << CancelInternal(aErrorCode);
+ }
  
  nsresult nsHttpChannel::CancelInternal(nsresult status) {
    LOG(("nsHttpChannel::CancelInternal [this=%p]\n", this));
@@ -2665,7 +3404,15 @@ index e4479400a4..fe1fa7ed3b 100644
    bool channelClassifierCancellationPending =
        !!LoadChannelClassifierCancellationPending();
    if (UrlClassifierFeatureFactory::IsClassifierBlockingErrorCode(status)) {
-@@ -6468,6 +6531,7 @@ nsresult nsHttpChannel::CancelInternal(nsresult status) {
+     StoreChannelClassifierCancellationPending(0);
+   }
+ 
+   mEarlyHintObserver = nullptr;
+@@ -6464,14 +6527,15 @@ nsresult nsHttpChannel::CancelInternal(nsresult status) {
+     Unused << AsyncAbort(status);
+   }
+ 
+   // If we already have mCallOnResume, AsyncAbort will be called in
    // ResumeInternal.
    if (needAsyncAbort && !mCallOnResume && !mSuspendCount) {
      LOG(("nsHttpChannel::CancelInternal do AsyncAbort [this=%p]\n", this));
@@ -2673,7 +3420,15 @@ index e4479400a4..fe1fa7ed3b 100644
      CloseCacheEntry(false);
      Unused << AsyncAbort(status);
    }
-@@ -6632,6 +6696,284 @@ nsHttpChannel::GetSecurityInfo(nsITransportSecurityInfo** securityInfo) {
+   return NS_OK;
+ }
+ 
+ void nsHttpChannel::CancelNetworkRequest(nsresult aStatus) {
+@@ -6628,14 +6692,292 @@ nsHttpChannel::Resume() {
+ NS_IMETHODIMP
+ nsHttpChannel::GetSecurityInfo(nsITransportSecurityInfo** securityInfo) {
+   NS_ENSURE_ARG_POINTER(securityInfo);
+   *securityInfo = do_AddRef(mSecurityInfo).take();
    return NS_OK;
  }
  
@@ -2958,7 +3713,15 @@ index e4479400a4..fe1fa7ed3b 100644
  // If any of the functions that AsyncOpen calls returns immediately an error
  // AsyncAbort(which calls onStart/onStopRequest) does not need to be call.
  // To be sure that they are not call ReleaseListeners() is called.
-@@ -6671,15 +7013,105 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+ // If AsyncOpen returns NS_OK, after that point AsyncAbort must be called on
+ // any error.
+ NS_IMETHODIMP
+ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+@@ -6667,23 +7009,113 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   AssertPrivateBrowsingId();
+ #endif
+ 
+   NS_ENSURE_ARG_POINTER(listener);
    NS_ENSURE_TRUE(!LoadIsPending(), NS_ERROR_IN_PROGRESS);
    NS_ENSURE_TRUE(!LoadWasOpened(), NS_ERROR_ALREADY_OPENED);
  
@@ -3064,7 +3827,15 @@ index e4479400a4..fe1fa7ed3b 100644
    MOZ_ASSERT(NS_IsMainThread());
  
    if (!gHttpHandler->Active()) {
-@@ -6749,7 +7181,7 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+     LOG(("  after HTTP shutdown..."));
+     ReleaseListeners();
+     return NS_ERROR_NOT_AVAILABLE;
+   }
+@@ -6745,15 +7177,15 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   // After we notify any observers (on-opening-request, loadGroup, etc) we
+   // must return NS_OK and return any errors asynchronously via
+   // OnStart/OnStopRequest.  Observers may add a reference to the channel
+   // and expect to get OnStopRequest so they know when to drop the reference,
    // etc.
  
    // notify "http-on-opening-request" observers, but not if this is a redirect
@@ -3073,7 +3844,15 @@ index e4479400a4..fe1fa7ed3b 100644
      gHttpHandler->OnOpeningRequest(this);
    }
  
-@@ -6768,6 +7200,18 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   StoreIsPending(true);
+   StoreWasOpened(true);
+ 
+   mListener = listener;
+@@ -6764,14 +7196,26 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+     gIOService->CallOrWaitForSocketProcess(
+         [self]() { self->AsyncOpenFinal(TimeStamp::Now()); });
+     return NS_OK;
+   }
  
    AsyncOpenFinal(TimeStamp::Now());
  
@@ -3092,7 +3871,15 @@ index e4479400a4..fe1fa7ed3b 100644
    return NS_OK;
  }
  
-@@ -11062,6 +11506,7 @@ NS_IMPL_ISUPPORTS(CopyNonDefaultHeaderVisitor, nsIHttpHeaderVisitor)
+ void nsHttpChannel::AsyncOpenFinal(TimeStamp aTimeStamp) {
+   // We save this timestamp from outside of the if block in case we enable the
+   // profiler after AsyncOpen().
+   mLastStatusReported = TimeStamp::Now();
+@@ -11058,14 +11502,15 @@ class CopyNonDefaultHeaderVisitor final : public nsIHttpHeaderVisitor {
+ };
+ 
+ NS_IMPL_ISUPPORTS(CopyNonDefaultHeaderVisitor, nsIHttpHeaderVisitor)
+ 
  }  // anonymous namespace
  
  nsresult nsHttpChannel::RedirectToInterceptedChannel() {
@@ -3100,7 +3887,15 @@ index e4479400a4..fe1fa7ed3b 100644
    nsCOMPtr<nsINetworkInterceptController> controller;
    GetCallback(controller);
  
-@@ -11078,6 +11523,13 @@ nsresult nsHttpChannel::RedirectToInterceptedChannel() {
+   RefPtr<InterceptedHttpChannel> intercepted =
+       InterceptedHttpChannel::CreateForInterception(
+           mChannelCreationTime, mChannelCreationTimestamp, mAsyncOpenTime);
+ 
+@@ -11074,14 +11519,21 @@ nsresult nsHttpChannel::RedirectToInterceptedChannel() {
+   nsCOMPtr<nsILoadInfo> redirectLoadInfo =
+       CloneLoadInfoForRedirect(mURI, nsIChannelEventSink::REDIRECT_INTERNAL);
+ 
+   nsresult rv = intercepted->Init(
        mURI, mCaps, static_cast<nsProxyInfo*>(mProxyInfo.get()),
        mProxyResolveFlags, mProxyURI, mChannelId, type, redirectLoadInfo);
  
@@ -3114,11 +3909,19 @@ index e4479400a4..fe1fa7ed3b 100644
    rv = SetupReplacementChannel(mURI, intercepted, true,
                                 nsIChannelEventSink::REDIRECT_INTERNAL);
    NS_ENSURE_SUCCESS(rv, rv);
+ 
+   // Some APIs, like fetch(), allow content to set non-standard headers.
+   // Normally these APIs are responsible for copying these headers across
+   // redirects.  In the e10s parent-side intercept case, though, we currently
 diff --git a/netwerk/protocol/http/nsHttpChannel.h b/netwerk/protocol/http/nsHttpChannel.h
 index cb8b8b7406..c4fbe39b85 100644
 --- a/netwerk/protocol/http/nsHttpChannel.h
 +++ b/netwerk/protocol/http/nsHttpChannel.h
-@@ -102,6 +102,9 @@ class nsHttpChannel final : public HttpBaseChannel,
+@@ -98,14 +98,17 @@ class nsHttpChannel final : public HttpBaseChannel,
+   // others.
+   NS_IMETHOD GetIsSSL(bool* aIsSSL) override;
+   NS_IMETHOD GetProxyMethodIsConnect(bool* aProxyMethodIsConnect) override;
+   NS_IMETHOD GetServerResponseHeader(
        nsACString& aServerResponseHeader) override;
    NS_IMETHOD GetProxyChallenges(nsACString& aChallenges) override;
    NS_IMETHOD GetWWWChallenges(nsACString& aChallenges) override;
@@ -3128,7 +3931,15 @@ index cb8b8b7406..c4fbe39b85 100644
    NS_IMETHOD SetProxyCredentials(const nsACString& aCredentials) override;
    NS_IMETHOD SetWWWCredentials(const nsACString& aCredentials) override;
    NS_IMETHOD OnAuthAvailable() override;
-@@ -849,6 +852,7 @@ class nsHttpChannel final : public HttpBaseChannel,
+   NS_IMETHOD OnAuthCancelled(bool userCancel) override;
+   NS_IMETHOD CloseStickyConnection() override;
+   NS_IMETHOD ConnectionRestartable(bool) override;
+   // Functions we implement from nsIHttpAuthenticableChannel but are
+@@ -845,14 +848,15 @@ class nsHttpChannel final : public HttpBaseChannel,
+ 
+   // If mHTTPSSVCRecord has value, it means OnHTTPSRRAvailable() is called and
+   // we got the result of HTTPS RR query. Otherwise, it means we are still
+   // waiting for the result or the query is not performed.
    Maybe<nsCOMPtr<nsIDNSHTTPSSVCRecord>> mHTTPSSVCRecord;
  
   protected:
@@ -3136,7 +3947,15 @@ index cb8b8b7406..c4fbe39b85 100644
    virtual void DoNotifyListenerCleanup() override;
  
    // Override ReleaseListeners() because mChannelClassifier only exists
-@@ -864,6 +868,27 @@ class nsHttpChannel final : public HttpBaseChannel,
+   // in nsHttpChannel and it will be released in ReleaseListeners().
+   virtual void ReleaseListeners() override;
+ 
+   virtual void DoAsyncAbort(nsresult aStatus) override;
+@@ -860,14 +864,35 @@ class nsHttpChannel final : public HttpBaseChannel,
+  private:  // cache telemetry
+   bool mDidReval{false};
+ 
+   RefPtr<nsIEarlyHintObserver> mEarlyHintObserver;
    Maybe<nsCString> mOpenerCallingScriptLocation;
    RefPtr<WebTransportSessionEventListener> mWebTransportSessionEventListener;
    nsMainThreadPtrHandle<nsIReplacedHttpResponse> mOverrideResponse;
@@ -3164,11 +3983,19 @@ index cb8b8b7406..c4fbe39b85 100644
  };
  
  NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpChannel, NS_HTTPCHANNEL_IID)
+ }  // namespace net
+ }  // namespace mozilla
+ 
+ inline nsISupports* ToSupports(mozilla::net::nsHttpChannel* aChannel) {
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
 index bf1ad9501f..c95a3eb8e8 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
-@@ -801,6 +801,65 @@ nsresult nsHttpHandler::AsyncOnChannelRedirect(
+@@ -797,14 +797,73 @@ void nsHttpHandler::NotifyObservers(nsIChannel* chan, const char* event) {
+   if (obsService) obsService->NotifyObservers(chan, event, nullptr);
+ }
+ 
+ nsresult nsHttpHandler::AsyncOnChannelRedirect(
      nsIChannel* oldChan, nsIChannel* newChan, uint32_t flags,
      nsIEventTarget* mainThreadEventTarget) {
    MOZ_ASSERT(NS_IsMainThread() && (oldChan && newChan));
@@ -3234,11 +4061,19 @@ index bf1ad9501f..c95a3eb8e8 100644
  
    nsCOMPtr<nsIURI> oldURI;
    oldChan->GetURI(getter_AddRefs(oldURI));
+   MOZ_ASSERT(oldURI);
+ 
+   nsCOMPtr<nsIURI> newURI;
+   newChan->GetURI(getter_AddRefs(newURI));
 diff --git a/netwerk/protocol/http/nsIHttpChannel.idl b/netwerk/protocol/http/nsIHttpChannel.idl
 index a8372ba080..366d1b9fc1 100644
 --- a/netwerk/protocol/http/nsIHttpChannel.idl
 +++ b/netwerk/protocol/http/nsIHttpChannel.idl
-@@ -21,9 +21,13 @@ native UniqueProfileChunkedBuffer(mozilla::UniquePtr<mozilla::ProfileChunkedBuff
+@@ -17,17 +17,21 @@ native UniqueProfileChunkedBuffer(mozilla::UniquePtr<mozilla::ProfileChunkedBuff
+ /**
+  * nsIHttpChannel
+  *
+  * This interface allows for the modification of HTTP request parameters and
   * the inspection of the resulting HTTP response status and headers when they
   * become available.
   */
@@ -3253,11 +4088,19 @@ index a8372ba080..366d1b9fc1 100644
      /**************************************************************************
       * REQUEST CONFIGURATION
       *
+      * Modifying request parameters after asyncOpen has been called is an error.
+      */
+ 
+     /**
 diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
 index d38cc43586..29e4765597 100644
 --- a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
 +++ b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
-@@ -19,6 +19,8 @@
+@@ -15,14 +15,16 @@
+ #include "nsIIOService.h"
+ #include "nsIInputStreamChannel.h"
+ #include "nsIReferrerInfo.h"
+ #include "nsMimeTypes.h"
  #include "nsNetUtil.h"
  #include "nsServiceManagerUtils.h"
  
@@ -3266,7 +4109,15 @@ index d38cc43586..29e4765597 100644
  NS_IMPL_ADDREF(nsViewSourceChannel)
  NS_IMPL_RELEASE(nsViewSourceChannel)
  /*
-@@ -45,6 +47,12 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+   This QI uses NS_INTERFACE_MAP_ENTRY_CONDITIONAL to check for
+   non-nullness of mHttpChannel, mCachingChannel, and mUploadChannel.
+ */
+ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+@@ -41,14 +43,20 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIFormPOSTActionChannel, mPostChannel)
+   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIChildChannel, mChildChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsIRequest, nsIViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsIChannel, nsIViewSourceChannel)
    NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIViewSourceChannel)
  NS_INTERFACE_MAP_END
  
@@ -3279,11 +4130,19 @@ index d38cc43586..29e4765597 100644
  static nsresult WillUseExternalProtocolHandler(nsIIOService* aIOService,
                                                 const char* aScheme) {
    nsCOMPtr<nsIProtocolHandler> handler;
+   nsresult rv =
+       aIOService->GetProtocolHandler(aScheme, getter_AddRefs(handler));
+   if (NS_FAILED(rv)) {
+     return rv;
 diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.h b/netwerk/protocol/viewsource/nsViewSourceChannel.h
 index 87c490f6b7..3ba43b499a 100644
 --- a/netwerk/protocol/viewsource/nsViewSourceChannel.h
 +++ b/netwerk/protocol/viewsource/nsViewSourceChannel.h
-@@ -48,6 +48,8 @@ class nsViewSourceChannel final : public nsIViewSourceChannel,
+@@ -44,14 +44,16 @@ class nsViewSourceChannel final : public nsIViewSourceChannel,
+   NS_DECL_NSICHANNELEVENTSINK
+   NS_FORWARD_SAFE_NSICACHEINFOCHANNEL(mCacheInfoChannel)
+   NS_FORWARD_SAFE_NSICACHINGCHANNEL(mCachingChannel)
+   NS_FORWARD_SAFE_NSIUPLOADCHANNEL(mUploadChannel)
    NS_FORWARD_SAFE_NSIFORMPOSTACTIONCHANNEL(mPostChannel)
    NS_FORWARD_SAFE_NSIHTTPCHANNELINTERNAL(mHttpChannelInternal)
  
@@ -3292,3 +4151,7 @@ index 87c490f6b7..3ba43b499a 100644
    // nsViewSourceChannel methods:
    nsViewSourceChannel() = default;
  
+   [[nodiscard]] nsresult Init(nsIURI* uri, nsILoadInfo* aLoadInfo);
+ 
+   [[nodiscard]] nsresult InitSrcdoc(nsIURI* aURI, nsIURI* aBaseURI,
+                                     const nsAString& aSrcdoc,
