@@ -1,0 +1,2376 @@
+This was applied on Firefox 137.0b10 in Arch Linux (firefox-developer-edition package)
+more specifically, on top of this source:
+https://archive.mozilla.org/pub/firefox/releases/137.0b10/source/firefox-137.0b10.source.tar.xz
+though on top of that it was also applied the Arch Linux patch 0001-Install-under-remoting-name.patch but it doesn't seem to affect this patch's application.
+
+TODO: a bunch of names that have 'custom' or 'Custom' should be renamed to 'original' or 'Original', else they're confusing.
+
+FIXME: original(custom)headers are being processed thus assumed to be a certain format which may miss headers. But after request completed, iirc, headers gets updated from a source that didn't do this processing (check if so).
+
+future updates should be happening here: https://github.com/dare3path/ff-req-show
+
+new changes:
+* ensures the Request payload is shown as formatted for in-flight unfinished-yet requests, and not just(like before) after they're finished/completed. FIXME: changes here may be overkill, besides I'm not really understanding what's happening here (grok3-suggested changes)
+* removed tons of dump() and printf() debug calls and related debug code; kept some rarely-hit cases.
+* if request is binary, clicking on another tab like Headers or Cookies then back to Request then turning on Raw button will show it as formatted via the "This is your modded firefox..." from the code.
+* superficilly tested to still work
+* (unrelated) removed two icu and protobuf unreachable code warnings
+
+diff --git a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
+index dede5f8822..8c8b04b12b 100644
+--- a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
++++ b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
+@@ -81,27 +81,29 @@ class RequestPanel extends Component {
+     this.toggleRawRequestPayload = this.toggleRawRequestPayload.bind(this);
+     this.renderRawRequestPayloadBtn =
+       this.renderRawRequestPayloadBtn.bind(this);
+   }
+ 
+   componentDidMount() {
+     const { request, connector } = this.props;
+-    fetchNetworkUpdatePacket(connector.requestData, request, [
++    const updates = fetchNetworkUpdatePacket(connector.requestData, request, [
+       "requestPostData",
++      "requestHeaders",//this might not be needed
+     ]);
+-    updateFormDataSections(this.props);
++    updates.then(() => updateFormDataSections(this.props));
+   }
+ 
+   // FIXME: https://bugzilla.mozilla.org/show_bug.cgi?id=1774507
+   UNSAFE_componentWillReceiveProps(nextProps) {
+     const { request, connector } = nextProps;
+-    fetchNetworkUpdatePacket(connector.requestData, request, [
++    const updates = fetchNetworkUpdatePacket(connector.requestData, request, [
+       "requestPostData",
++      "requestHeaders",//this might not be needed
+     ]);
+-    updateFormDataSections(nextProps);
++    updates.then(() => updateFormDataSections(nextProps));
+ 
+     if (nextProps.targetSearchResult !== null) {
+       this.setState({
+         rawRequestPayloadDisplayed: !!nextProps.targetSearchResult,
+       });
+     }
+   }
+@@ -186,15 +188,15 @@ class RequestPanel extends Component {
+     return component(componentProps);
+   }
+ 
+   render() {
+     const { request, targetSearchResult } = this.props;
+     const { filterText, rawRequestPayloadDisplayed } = this.state;
+     const { formDataSections, mimeType, requestPostData } = request;
+-    const postData = requestPostData ? requestPostData.postData?.text : null;
++    const postData = requestPostData ? requestPostData.postData?.text : null; // orig
+ 
+     if ((!formDataSections || formDataSections.length === 0) && !postData) {
+       return div({ className: "empty-notice" }, REQUEST_EMPTY_TEXT);
+     }
+ 
+     let component;
+     let componentProps;
+diff --git a/devtools/client/netmonitor/src/connector/firefox-data-provider.js b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+index 0a85eb487e..a7c095ce88 100644
+--- a/devtools/client/netmonitor/src/connector/firefox-data-provider.js
++++ b/devtools/client/netmonitor/src/connector/firefox-data-provider.js
+@@ -161,15 +161,15 @@ class FirefoxDataProvider {
+       responseCookiesObj,
+       responseCacheObj,
+     ] = await Promise.all([
+       this.fetchResponseContent(responseContent),
+       this.fetchRequestHeaders(requestHeaders),
+       this.fetchResponseHeaders(responseHeaders),
+       this.fetchEarlyHintResponseHeaders(earlyHintsResponseHeaders),
+-      this.fetchPostData(requestPostData),
++      this.fetchPostData(requestPostData || { from: id } ), //eg. {"from":"server0.conn0.netEvent73"}
+       this.fetchRequestCookies(requestCookies),
+       this.fetchResponseCookies(responseCookies),
+       this.fetchResponseCache(responseCache),
+     ]);
+ 
+     const payload = Object.assign(
+       {},
+@@ -236,33 +236,146 @@ class FirefoxDataProvider {
+       }
+     }
+     return payload;
+   }
+ 
+   async fetchPostData(requestPostData) {
+     const payload = {};
+-    if (requestPostData?.postData) {
+-      const { text } = requestPostData.postData;
+-      const postData = await this.getLongString(text);
+-      const headers = CurlUtils.getHeadersFromMultipartText(postData);
+-
+-      // Calculate total header size and don't forget to include
+-      // two new-line characters at the end.
+-      const headersSize = headers.reduce((acc, { name, value }) => {
+-        return acc + name.length + value.length + 2;
+-      }, 0);
+-
+-      requestPostData.postData.text = postData;
+-      payload.requestPostData = {
+-        ...requestPostData,
+-        uploadHeaders: { headers, headersSize },
+-      };
++    // ^ originally this would return {} for blocked requests
++
++    let requestId = requestPostData?.requestId || requestPostData?.from; // Try input
++
++    if (!requestId) {
++      return payload;
+     }
+-    return payload;
+-  }
++
++    try {
++      const networkEvents = await this.commands.resourceCommand.getAllResources("network-event");
++      const event = networkEvents.find(e => e.actor === requestId || e.resourceId === requestId || e.channelId === requestId); // Prioritize actor match
++      if (!event || !event.actor) {
++        return payload;
++      }
++
++      let postDataText;
++      const client = this.commands.client;
++      const actorId = event.actor;
++
++      let theLongStringActorPostData=null;
++      try {
++        const packet = { to: actorId, type: "getRequestPostData" };
++        const startTime = Date.now();
++        const postDataResponse = await Promise.race([
++          client.request(packet),
++          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout after 2000ms")), 2000))
++        ]);
++        const elapsed = Date.now() - startTime;
++
++        if (postDataResponse.postData) {
++          theLongStringActorPostData=postDataResponse.postData;
++        }
++
++        if (postDataResponse.postData?.text?.substring) {
++          postDataText = await postDataResponse.postData.text.substring(0, postDataResponse.postData.text.length);
++        } else {
++          postDataText = postDataResponse.postData?.text;
++        }
++      } catch (e) {
++        //XXX: dump() are visible on terminal if about:config setting browser.dom.window.dump.enabled is true
++        dump("fetchPostData: falling back to null due to Error fetching postData: " + e + "\n");
++        postDataText = null;
++      }
++
++
++
++      if (postDataText) {
++        payload.requestPostData = {};
++        payload.requestPostData.uploadHeaders = { headers: [], headersSize: 0 }; //XXX: without these being empty, it won't auto-apply the "Form data" view for example, it's all Raw.
++        //original curl headers code logic, hopefully.
++        try {
++          if (theLongStringActorPostData) {
++            const { text } = theLongStringActorPostData;
++            //that 'text' is a LongStringActor, supposedly, from getRequestPostData() function's return.
++            const postData = await this.getLongString(text);//XXX: 'text' here must be LongStringActor else(sometimes?) u get: "JavaScript error: resource://devtools/client/shared/string-utils.js, line 19: TypeError: can't access property "type", stringGrip is null"
++            const headers = CurlUtils.getHeadersFromMultipartText(postData);
++
++            // Calculate total header size and don't forget to include
++            // two new-line characters at the end.
++            const headersSize = headers.reduce((acc, { name, value }) => {
++              return acc + name.length + value.length + 2;
++            }, 0);
++
++            // always(so far): Headers from CurlUtils: [], Size: 0
++            payload.requestPostData.uploadHeaders = { headers, headersSize };
++          } // if
++        } catch (e) {
++          dump("fetchPostData: Error with CurlUtils: " + e + "\n");//keep
++        } //curl logic ends.
++
++        const isBinary = /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(postDataText); // Control chars except tab, newline, CR
++        // Process binary data
++        if (isBinary) {
++          // Store raw text before we mess with it
++          const rawText = postDataText;
++          // Split on single quotes, process each chunk for printf
++          const chunks = postDataText.split("'");
++          const processedChunks = chunks.map(chunk =>
++            Array.from(chunk, char => {
++              const code = char.charCodeAt(0);
++              if (code < 0x20) return "\\x" + code.toString(16).padStart(2, "0"); // Control chars
++              if (char === "\\") return "\\\\"; // Escape backslash
++              //if (char === "%") return "%%"; // Escape percent, XXX: no need if: printf '%b' 'payload', and a -- isn't needed either after '%b' due to how '%b' works and treat it as raw text, but u can do printf -- '%b' ...
++              return char; // Everything else (including %) as-is
++            }).join("")
++          );
++          const escapedForPrintf=processedChunks.join("'$\"'\"'");//for when using '%b' as first arg of printf!
++
++          // Generate hex dump with offset, hex, and raw text, 16 chars (8 bytes) per line
++          const bytes = Array.from(rawText);
++          const hexxedLines = [];
++          for (let i = 0; i < bytes.length; i += 8) {
++            const offset = i.toString(16).padStart(8, "0"); // 8-digit hex offset
++            const hexChunk = bytes.slice(i, i + 8)
++              .map(char => char.charCodeAt(0).toString(16).padStart(2, "0"))
++              .join(" ");
++            const rawChunk = bytes.slice(i, i + 8)
++              .map(char => {
++                const code = char.charCodeAt(0);
++                return (code < 0x20 || code > 0x7e) ? "." : char; // Unprintable as "."
++              }).join("");
++            hexxedLines.push(`${offset}: ${hexChunk.padEnd(23, " ")} | ${rawChunk}`);
++          }
++          const hexxed = hexxedLines.join("\n");
++
++
++          // to see this, when Content-type is causing the UI in Request tab to show you the payload as formatted, like 'Form data' style, you've to just click another tab like Headers or Cookies, then click back on Request and you'll see this payload (if it's binary), else you see the original payload - an unintended feature now, and when u switch Raw button to off you see 'Form data' of original payload which is way better than seeing this one in 'Form data' format.
++          // Join with bash-safe single quote concatenation
++          postDataText = "This is your modded firefox saying that\n"+
++            " this request payload is binary\n"+
++            " therefore to see it raw\n"+
++            " you could do this in bash(long line follows btw):\n\n"+
++            // note a "--" isn't needed due to '%b' treating everything after as the text, not args!
++            "printf -- '%b' '" + escapedForPrintf + "'\n\n"+
++            " and maybe redirect that by appending this to it:\n"+
++            " >binary_payload.bin && xxd -g 1 -c 8 -- binary_payload.bin\n\n"+
++            "You should turn on Raw(top right) so it's monospaced\n"+
++            " and it's not interpreted like Form data(if it is)\n\n"+
++            "Otherwise here's a hex view of it:\n\n" +
++            hexxed +"\n\n"+
++            "And here's what it woulda been shown as,\n if we didn't get in the way at all:\n" + rawText;
++        } // if bin
++        const postData=await this.getLongString(postDataText);
++        payload.requestPostData.postData = { text: postData };
++      } // if not empty
++
++    } catch (e) {
++      dump("fetchPostData: Outer error: " + e + "\n");
++    }
++
++    return payload; //can be {}
++  } // fetchPostData
+ 
+   async fetchRequestCookies(requestCookies) {
+     const payload = {};
+     if (requestCookies) {
+       const reqCookies = [];
+       // request store cookies in requestCookies or requestCookies.cookies
+       const cookies = requestCookies.cookies
+@@ -646,15 +759,15 @@ class FirefoxDataProvider {
+           // Swallow errors to avoid unhandled promise rejections in tests.
+           console.warn(
+             `Firefox Data Provider destroyed while requesting data: ${e.message}`
+           );
+           // Return an empty response packet to avoid too many callback errors.
+           response = { from: actor };
+         } else {
+-          throw new Error(
++          throw new Error( //line 806
+             `Error while calling method ${clientMethodName}: ${e.message}`
+           );
+         }
+       }
+     }
+ 
+     // Restore clone actor id
+diff --git a/devtools/client/netmonitor/src/utils/request-utils.js b/devtools/client/netmonitor/src/utils/request-utils.js
+index baa3c28a29..c9717d8cf4 100644
+--- a/devtools/client/netmonitor/src/utils/request-utils.js
++++ b/devtools/client/netmonitor/src/utils/request-utils.js
+@@ -103,15 +103,15 @@ function fetchNetworkUpdatePacket(requestData, request, updateTypes) {
+       if (updateType === "stackTrace") {
+         if (request.cause.stacktraceAvailable && !request.stacktrace) {
+           promises.push(requestData(request.id, updateType));
+         }
+         return;
+       }
+ 
+-      if (request[`${updateType}Available`] && !request[updateType]) {
++      if (!request[updateType]) { // Fetch always, ignore Available flag
+         promises.push(requestData(request.id, updateType));
+       }
+     });
+   }
+ 
+   return Promise.all(promises);
+ }
+@@ -559,27 +559,27 @@ async function updateFormDataSections(props) {
+     requestHeaders,
+     requestHeadersAvailable,
+     requestHeadersFromUploadStream,
+     requestPostData,
+     requestPostDataAvailable,
+   } = request;
+ 
+-  if (requestHeadersAvailable && !requestHeaders) {
++  if (!requestHeaders) {
+     requestHeaders = await connector.requestData(id, "requestHeaders");
+   }
+ 
+-  if (requestPostDataAvailable && !requestPostData) {
++  if (!requestPostData) {
+     requestPostData = await connector.requestData(id, "requestPostData");
+   }
+ 
+   if (
+     !formDataSections &&
+-    requestHeaders &&
+-    requestPostData &&
+-    requestHeadersFromUploadStream
++//    requestHeaders &&
++    requestPostData
++//    && requestHeadersFromUploadStream
+   ) {
+     formDataSections = await getFormDataSections(
+       requestHeaders,
+       requestHeadersFromUploadStream,
+       requestPostData,
+       connector.getLongString
+     );
+@@ -609,15 +609,15 @@ async function getMessagePayload(payload, getLongString) {
+  */
+ function processNetworkUpdates(update) {
+   const newRequest = {};
+   for (const [key, value] of Object.entries(update)) {
+     if (UPDATE_PROPS.includes(key)) {
+       newRequest[key] = value;
+       if (key == "requestPostData") {
+-        newRequest.requestHeadersFromUploadStream = value.uploadHeaders;
++        newRequest.requestHeadersFromUploadStream = value.uploadHeaders; //  line 624
+       }
+     }
+   }
+   return newRequest;
+ }
+ 
+ /**
+diff --git a/devtools/server/actors/network-monitor/network-event-actor.js b/devtools/server/actors/network-monitor/network-event-actor.js
+index 9e5a16ba46..3296d0446f 100644
+--- a/devtools/server/actors/network-monitor/network-event-actor.js
++++ b/devtools/server/actors/network-monitor/network-event-actor.js
+@@ -64,78 +64,194 @@ function isFileChannel(channel) {
+  *        - fromCache: boolean
+  *        - fromServiceWorker: boolean
+  *        - timestamp: number
+  * @param {nsIChannel} channel
+  *        The channel related to this network event
+  */
+ class NetworkEventActor extends Actor {
++  // Getter (not method) for item
++  get requestPostData() {
++    //FIXME: the unintented feature is caused by this?
++    return this._requestPostData;
++  }
++
+   constructor(
+     conn,
+     sessionContext,
+     { onNetworkEventUpdate, onNetworkEventDestroy },
+     networkEventOptions,
+     channel
+   ) {
+     super(conn, networkEventSpec);
+ 
++    this._channel = channel;
++    this._postDataText = null;
++    if (channel) {
++      try {
++        const chan = channel.QueryInterface(Ci.nsIChannel);
++      } catch (e) {
++        dump("channel.QueryInterface failed: " + e + "\n");
++      }
++
++
++      // Check specific interfaces
++      let isHttpChannel = false;
++      try {
++        if (this._channel instanceof Ci.nsIHttpChannel) {
++          isHttpChannel = true;
++        }
++      } catch (e) {
++        dump("Instance check failed: " + e + "\n");
++      }
++
++      if (isHttpChannel) {
++        try {
++          let text = {};
++          channel.getPostDataText(text);
++          if (text.value) {
++            this._postDataText = text.value;
++          }
++        } catch (e) {
++          dump("Initial getPostDataText call failed: " + e + "\n");
++        }
++      }
++      if (null === this._postDataText) {
++        // Verify channel identity
++        if (this._channel?.loadInfo) {
++          const loadInfo = channel.loadInfo;
++          try {
++            if ("customPostDataText" in this._channel.loadInfo) {
++              const postData = channel.loadInfo.customPostDataText;
++              // MODIFIED: Hack for nsIDataChannel if empty
++              try {
++                const li = loadInfo.QueryInterface(Ci.nsILoadInfo);
++              } catch (e) {
++                dump("loadInfo introspection failed: " + e + "\n");
++              }
++
++              if (postData) {//TODO: try with empty "" string what happens? no payload shown in UI, i guess it's good then.
++                this._postDataText = postData;
++              }
++            }//if
++          } catch (e) {
++            dump("loadInfo getPostDataText failed: " + e + "\n");
++          }
++        }//if
++      }//if
++    } else {
++      dump("No channel in constructor\n");//kind of a big deal
++    }
++
+     this._sessionContext = sessionContext;
+     this._onNetworkEventUpdate = onNetworkEventUpdate;
+     this._onNetworkEventDestroy = onNetworkEventDestroy;
+ 
+     // Store the channelId which will act as resource id.
+     this._channelId = channel.channelId;
+ 
+     this._timings = {};
+     this._serverTimings = [];
+ 
+     this._discardRequestBody = !!networkEventOptions.discardRequestBody;
+     this._discardResponseBody = !!networkEventOptions.discardResponseBody;
++    if (this._discardRequestBody || this._discardResponseBody) {
++      //at least one of them's true, show them.
++      dump("One of them's true not the expected false: this._discardRequestBody="+this._discardRequestBody+", this._discardResponseBody="+this._discardResponseBody+"\n");
++    }
+ 
+     this._response = {
+       headers: [],
+       cookies: [],
+       content: {},
+     };
+ 
+     this._earlyHintsResponse = {
+       headers: [],
+       rawHeaders: "",
+     };
+ 
++    // CHANGE: Full postData structure
++    const postData = this._postDataText
++      ? { text: this._postDataText, size: this._postDataText.length }
++      : {};
++    const requestData = { postData, uploadHeaders: { headers: [], headersSize: 0 } };
++
++
++    let requestHeaders=[];
+     if (isDataChannel(channel) || isFileChannel(channel)) {
+       this._innerWindowId = null;
+       this._isNavigationRequest = false;
+-
++      // CHANGED: Probe loadInfo for headers
++      if (channel?.loadInfo) {
++        this._originalURI = channel.loadInfo?.originalRequestURI || channel.URI?.spec || "Failed: channel.URI?.spec was falsy for data or file channel.";
++        if (channel?.loadInfo?.customRequestHeaders) {
++          const rawHeaders = channel.loadInfo.customRequestHeaders;
++          requestHeaders = rawHeaders
++            .split("\r\n")
++            .filter(line => line.length)
++            .map(line => {
++              const [name, ...valueParts] = line.split(": ");
++              return { name, value: valueParts.join(": ") || "" };
++            });
++        } else {
++          requestHeaders = [
++            { name: "X-Dummy-Header", value: "falsy channel?.loadInfo?.customRequestHeaders" },
++            { name: "Content-Type", value: "text/plain" }
++          ];
++        }
++      } else {
++        dump(`[netmonitor] Constructor: falsy channel?.loadInfo`);
++      }
+       this._request = {
+         cookies: [],
+-        headers: [],
+-        postData: {},
++        headers: requestHeaders,
++        postData: requestData, // Full shape
+         rawHeaders: "",
+       };
+       this._resource = this._createResource(networkEventOptions, channel);
+       return;
++    } else {
++      // XXX: no need to set it for normal requests, it's seen properly in _createResource below due to that fallback!
++      this._originalURI = channel?.URI?.spec || undefined;
++      // FIXME: this is a differently-caused error: JavaScript error: resource://devtools/client/netmonitor/src/connector/firefox-data-provider.js, line 733: TypeError: can't access property "replace", actor is undefined
++    }
++
++    try {
++      if (channel?.QueryInterface(Ci.nsIHttpChannel)) {
++        try {
++          channel.visitRequestHeaders({
++            visitHeader: (name, value) => {
++              requestHeaders.push({ name, value });
++            }
++          });
++        } catch (e) {
++          dump(`[netmonitor] Constructor: visitRequestHeaders failed: ${e}\n`);
++        }
++      }
++    } catch(e) {
++      dump(`[netmonitor] Constructor: failed to query interface Ci.nsIHttpChannel: ${e}\n`);
+     }
+ 
+     // innerWindowId and isNavigationRequest are used to check if the actor
+     // should be destroyed when a window is destroyed. See network-events.js.
+     this._innerWindowId = lazy.NetworkUtils.getChannelInnerWindowId(channel);
+     this._isNavigationRequest = lazy.NetworkUtils.isNavigationRequest(channel);
+ 
+     // Retrieve cookies and headers from the channel
+     const { cookies, headers } =
+       lazy.NetworkUtils.fetchRequestHeadersAndCookies(channel);
+ 
+     this._request = {
+       cookies,
+-      headers,
+-      postData: {},
++      headers: requestHeaders.length ? requestHeaders : headers,
++      postData: requestData, // Full shape
+     };
+ 
+     this._resource = this._createResource(networkEventOptions, channel);
+-  }
++  } // end of constructor
+ 
+   /**
+    * Return the network event actor as a resource, and add the actorID which is
+    * not available in the constructor yet.
+    */
+   asResource() {
+     return {
+@@ -148,24 +264,29 @@ class NetworkEventActor extends Actor {
+    * Create the resource corresponding to this actor.
+    */
+   _createResource(networkEventOptions, channel) {
+     let wsChannel;
+     let method;
+     if (isDataChannel(channel) || isFileChannel(channel)) {
+       channel.QueryInterface(Ci.nsIChannel);
++      /* Purpose: QueryInterface(Ci.nsIChannel) acts as an assertion. If channel ever isn’t at least an nsIChannel (e.g., a corrupted wrapper, wrong object passed), it throws NS_ERROR_NO_INTERFACE. This crashes early, alerting devs to a problem upstream (e.g., NetworkEventActor constructor or observer).
++Context: isDataChannel() and isFileChannel() expect nsIDataChannel or nsIFileChannel, both of which inherit nsIChannel. The else branch assumes nsIHttpChannel (also an nsIChannel). This QI ensures the baseline interface before proceeding. */
+       wsChannel = null;
+       method = "GET";
+     } else {
+       channel = channel.QueryInterface(Ci.nsIHttpChannel);
+       wsChannel = lazy.NetworkUtils.getWebSocketChannel(channel);
+       method = channel.requestMethod;
+     }
+ 
+     // Use the WebSocket channel URL for websockets.
+-    const url = wsChannel ? wsChannel.URI.spec : channel.URI.spec;
++    // XXX: to avoid this:
++    //  JavaScript error: resource://devtools/client/netmonitor/src/utils/request-utils.js, line 248: TypeError: can't access property "href", urlObject is null
++    //  must set this fallback in case for some reason this._originalURI is undefined:
++    const url = wsChannel ? wsChannel.URI.spec : (this._originalURI || channel.URI.spec);
+ 
+     let browsingContextID =
+       lazy.NetworkUtils.getChannelBrowsingContextID(channel);
+ 
+     // Ensure that we have a browsing context ID for all requests.
+     // Only privileged requests debugged via the Browser Toolbox (sessionContext.type == "all") can be unrelated to any browsing context.
+     if (!browsingContextID && this._sessionContext.type != "all") {
+@@ -208,14 +329,19 @@ class NetworkEventActor extends Actor {
+       blockedReason === false ||
+       blockedReason === null ||
+       blockedReason === ""
+     ) {
+       blockedReason = "unknown";
+     }
+ 
++    // Double-check payload here too
++    const postDataText = this._postDataText || channel?.loadInfo?.customPostDataText || null; //doesnt
++    const postData = postDataText
++      ? { text: postDataText, size: postDataText.length }
++      : {};
+     const resource = {
+       resourceId: this._channelId,
+       resourceType: NETWORK_EVENT,
+       blockedReason,
+       blockingExtension: networkEventOptions.blockingExtension,
+       browsingContextID,
+       cause,
+@@ -233,18 +359,20 @@ class NetworkEventActor extends Actor {
+       referrerPolicy: lazy.NetworkUtils.getReferrerPolicy(channel),
+       stacktraceResourceId,
+       startedDateTime: new Date(timeStamp).toISOString(),
+       securityFlags: channel.loadInfo.securityFlags,
+       timeStamp,
+       timings: {},
+       url,
++      headers: this._request.headers, // Pass full headers here
++      postData: { postData, uploadHeaders: { headers: [], headersSize: 0 } } // Match fetchPostData shape
+     };
+ 
+     return resource;
+-  }
++  } // _createResource
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   destroy(conn) {
+     if (!this._channelId) {
+       return;
+@@ -280,22 +408,23 @@ class NetworkEventActor extends Actor {
+     let rawHeaders;
+     let headersSize = 0;
+     if (this._request.rawHeaders) {
+       headersSize = this._request.rawHeaders.length;
+       rawHeaders = this._createLongStringActor(this._request.rawHeaders);
+     }
+ 
+-    return {
++    let ret= {
+       headers: this._request.headers.map(header => ({
+         name: header.name,
+         value: this._createLongStringActor(header.value),
+       })),
+       headersSize,
+       rawHeaders,
+     };
++    return ret;
+   }
+ 
+   /**
+    * The "getRequestCookies" packet type handler.
+    *
+    * @return object
+    *         The response packet - network request cookies.
+@@ -311,28 +440,81 @@ class NetworkEventActor extends Actor {
+ 
+   /**
+    * The "getRequestPostData" packet type handler.
+    *
+    * @return object
+    *         The response packet - network POST data.
+    */
++//  getRequestPostData() {
++//    dump("getRequestPostData(in .js) called, channel=" + this._channel +
++//       ", loadInfo=" + (this._channel?.loadInfo || "null") +
++//       ", this._channel?.loadInfo?.customPostDataText=" + (this._channel?.loadInfo?.customPostDataText || "null") +
++//      ", this._postDataText=" + this._postDataText +
++//      " and is of type: "+ typeof this._postDataText
++//      +"\n");
++//    dump("still in getRequestPostData, channel: " + (this._channel ? "present" : "null") + ", request.postData.text: " + (this._request.postData.text || "null") + ", stored postDataText: " + (this._postDataText || "null") + "\n"); // Changed: Log all sources
++//    let postDataText;
++//    if (this._request.postData.text) {
++//      postDataText = this._createLongStringActor(this._request.postData.text);
++//      dump("Returning original postData as LongStringActor: " + this._request.postData.text + "\n"); // Changed: Log value
++//      return {
++//        postData: { text: postDataText, size: this._request.postData.size },
++//        postDataDiscarded: this._discardRequestBody,
++//      };
++//    }
++//    if (this._postDataText) {
++//      postDataText = this._createLongStringActor(this._postDataText);
++//      dump("Returning stored postDataText as LongStringActor: " + this._postDataText + "\n"); // Changed: Log value
++//      return { postData: { text: postDataText, size: this._postDataText.length }, postDataDiscarded: false };
++//    } else {
++//      dump("seeing this._postDataText as falsy in getRequestPostData()\n");
++//    }
++//    if (!this._channel) {
++//      dump("No channel available\n");
++//      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++//    }
++//    try {
++//      let text = {};
++//      this._channel.getPostDataText(text);
++//      dump("Live channel getPostDataText, text: " + (text.value || "empty") + "\n");
++//      if (text.value) {
++//        postDataText = this._createLongStringActor(text.value);
++//        dump("Returning live postData as LongStringActor: " + text.value + "\n"); // Changed: Log value
++//        return { postData: { text: postDataText, size: text.value.length }, postDataDiscarded: false };
++//      }
++//      dump("No valid live postData available\n");
++//    } catch (e) {
++//      dump("Live channel getPostDataText failed: " + e + ", falling back to loadInfo.\n");
++//    }
++//    // Fallback to loadInfo
++//    if (this._channel.loadInfo && "customPostDataText" in this._channel.loadInfo) {
++//      let loadInfoText = this._channel.loadInfo.customPostDataText;
++//      dump("Falling back to loadInfo.customPostDataText: " + (loadInfoText || "null") + "\n");
++//      if (loadInfoText) {
++//        postDataText = this._createLongStringActor(loadInfoText);
++//        return { postData: { text: postDataText, size: loadInfoText.length }, postDataDiscarded: false };
++//      }
++//    } else {
++//      dump("Falling back to empty payload\n");
++//      return { postData: { size: 0, text: null }, postDataDiscarded: false };
++//    }
++//  }//TODO: this commented out block was the previous version which the AI transformed into the below uncommented one; so, must check to see what this was doing and if the logic was kept below?! and the uncommented block below likely got updated since though, with more logic(like text must not be null).
+   getRequestPostData() {
+-    let postDataText;
+-    if (this._request.postData.text) {
+-      // Create a long string actor for the postData text if needed.
+-      postDataText = this._createLongStringActor(this._request.postData.text);
+-    }
+-
+-    return {
+-      postData: {
+-        size: this._request.postData.size,
+-        text: postDataText,
+-      },
+-      postDataDiscarded: this._discardRequestBody,
++    let postDataText = this._postDataText || this._channel?.loadInfo?.customPostDataText || null;
++    const postData = postDataText
++      ? { text: this._createLongStringActor(postDataText), size: postDataText.length }
++      : { size: 0, text: "" /*null here would break original ff code in "JavaScript error: resource://devtools/client/shared/string-utils.js, line 19: TypeError: can't access property "type", stringGrip is null
++"*/
++      };
++    const response = {
++      uploadHeaders: { headers: [], headersSize: 0 },
++      postData,
++      postDataDiscarded: this._discardRequestBody
+     };
++    return response;
+   }
+ 
+   /**
+    * The "getSecurityInfo" packet type handler.
+    *
+    * @return object
+    *         The response packet - connection security information.
+diff --git a/devtools/server/actors/resources/network-events.js b/devtools/server/actors/resources/network-events.js
+index ff38ed13a1..3508e96f4f 100644
+--- a/devtools/server/actors/resources/network-events.js
++++ b/devtools/server/actors/resources/network-events.js
+@@ -280,28 +280,37 @@ class NetworkEventWatcher {
+   onNetworkEvent(networkEventOptions, channel) {
+     if (channel.channelId && this.networkEvents.has(channel.channelId)) {
+       throw new Error(
+         `Got notified about channel ${channel.channelId} more than once.`
+       );
+     }
+ 
+-    const actor = new NetworkEventActor(
++    const actor = new NetworkEventActor( // line 287
+       this.watcherActor.conn,
+       this.watcherActor.sessionContext,
+       {
+         onNetworkEventUpdate: this.onNetworkEventUpdate.bind(this),
+         onNetworkEventDestroy: this.onNetworkEventDestroy.bind(this),
+       },
+       networkEventOptions,
+       channel
+     );
+     this.pool.manage(actor);
+ 
+     const resource = actor.asResource();
+     const isBlocked = !!resource.blockedReason;
++
++    //this ensures the request headers+req.payload are shown in UI even before the request complets eg. if req. takes 5 sec and/or gets stopped(eg. by F5-ing) then this is the only data that remains shown in the UI; after it completes the headers do get refreshed(later, by other code iirc) and u get to see more headers and the status code like 200 OK, but until then it would be empty without this code below for req.payload too.
++    resource.requestHeaders = actor.getRequestHeaders();
++    if (actor.requestPostData) { // never hit
++      dump("!!!!!!!!!!!!! actor.requestPostData="+actor.requestPostData+" type="+typeof actor.requestPostData+"\n");
++    }
++    const postDataResponse = actor.requestPostData || actor.getRequestPostData();
++    resource.requestPostData = postDataResponse;
++
+     const networkEvent = {
+       browsingContextID: resource.browsingContextID,
+       innerWindowId: resource.innerWindowId,
+       resourceId: resource.resourceId,
+       isBlocked,
+       receivedUpdates: [],
+       resourceUpdates: {
+diff --git a/devtools/shared/network-observer/NetworkObserver.sys.mjs b/devtools/shared/network-observer/NetworkObserver.sys.mjs
+index 6fba6e866a..18e60434a6 100644
+--- a/devtools/shared/network-observer/NetworkObserver.sys.mjs
++++ b/devtools/shared/network-observer/NetworkObserver.sys.mjs
+@@ -344,19 +344,20 @@ export class NetworkObserver {
+       }
+ 
+       const channel = subject.QueryInterface(Ci.nsIHttpChannel);
+       if (this.#ignoreChannelFunction(channel)) {
+         return;
+       }
+ 
++
+       // Here we create the network event from an early platform notification.
+       // Additional details about the event will be provided using the various
+       // callbacks on the network event owner.
+-      const httpActivity = this.#createOrGetActivityObject(channel);
+-      this.#createNetworkEvent(httpActivity);
++      const httpActivity = this.#createOrGetActivityObject(channel);//orig
++      this.#createNetworkEvent(httpActivity);//orig
+ 
+       // Handle overrides in http-on-before-connect because we need to redirect
+       // the request to the override before reaching the server.
+       this.#checkForContentOverride(httpActivity);
+     }
+   );
+ 
+diff --git a/intl/icu/source/i18n/collationdatabuilder.cpp b/intl/icu/source/i18n/collationdatabuilder.cpp
+index 44a108086a..32e0a062ad 100644
+--- a/intl/icu/source/i18n/collationdatabuilder.cpp
++++ b/intl/icu/source/i18n/collationdatabuilder.cpp
+@@ -409,17 +409,16 @@ CollationDataBuilder::setPrimaryRangeAndReturnNext(UChar32 start, UChar32 end,
+                                                       (end - start + 1) * step);
+     } else {
+         // Short range: Set individual CE32s.
+         for(;;) {
+             utrie2_set32(trie, start, Collation::makeLongPrimaryCE32(primary), &errorCode);
+             ++start;
+             primary = Collation::incThreeBytePrimaryByOffset(primary, isCompressible, step);
+-            if(start > end) { return primary; }
++            if(start > end) { modified = true; return primary; }
+         }
+-        modified = true;
+     }
+ }
+ 
+ uint32_t
+ CollationDataBuilder::getCE32FromOffsetCE32(UBool fromBase, UChar32 c, uint32_t ce32) const {
+     int32_t i = Collation::indexFromCE32(ce32);
+     int64_t dataCE = fromBase ? base->ces[i] : ce64s.elementAti(i);
+diff --git a/ipc/glue/BackgroundUtils.cpp b/ipc/glue/BackgroundUtils.cpp
+index 0f3f2976e2..61f42c0924 100644
+--- a/ipc/glue/BackgroundUtils.cpp
++++ b/ipc/glue/BackgroundUtils.cpp
+@@ -550,14 +550,23 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+       aLoadInfo->GetOverriddenFingerprintingSettings();
+ 
+   if (overriddenFingerprintingSettings) {
+     overriddenFingerprintingSettingsArg =
+         Some(overriddenFingerprintingSettings.ref());
+   }
+ 
++  // Add our field(s)
++  nsAutoString customPostDataText;
++  aLoadInfo->GetCustomPostDataText(customPostDataText);
++  nsAutoString customRequestHeaders;
++  aLoadInfo->GetCustomRequestHeaders(customRequestHeaders);
++  nsAutoString originalRequestURI;
++  aLoadInfo->GetOriginalRequestURI(originalRequestURI);
++
++
+   *outLoadInfoArgs = LoadInfoArgs(
+       loadingPrincipalInfo, triggeringPrincipalInfo, principalToInheritInfo,
+       topLevelPrincipalInfo, optionalResultPrincipalURI, triggeringRemoteType,
+       aLoadInfo->GetSandboxedNullPrincipalID(), aLoadInfo->GetSecurityFlags(),
+       aLoadInfo->GetSandboxFlags(), aLoadInfo->GetTriggeringSandboxFlags(),
+       aLoadInfo->GetTriggeringWindowId(),
+       aLoadInfo->GetTriggeringStorageAccess(),
+@@ -599,15 +608,20 @@ nsresult LoadInfoToLoadInfoArgs(nsILoadInfo* aLoadInfo,
+       aLoadInfo->GetIsMediaRequest(), aLoadInfo->GetIsMediaInitialRequest(),
+       aLoadInfo->GetIsFromObjectOrEmbed(), cookieJarSettingsArgs,
+       aLoadInfo->GetRequestBlockingReason(), maybeCspToInheritInfo,
+       aLoadInfo->GetStoragePermission(), overriddenFingerprintingSettingsArg,
+       aLoadInfo->GetIsMetaRefresh(), aLoadInfo->GetLoadingEmbedderPolicy(),
+       aLoadInfo->GetIsOriginTrialCoepCredentiallessEnabledForTopLevel(),
+       unstrippedURI, interceptionInfoArg, aLoadInfo->GetIsNewWindowTarget(),
+-      aLoadInfo->GetUserNavigationInvolvement());
++      aLoadInfo->GetUserNavigationInvolvement(),
++      // Add our field at the end (position matches NeckoChannelParams.ipdlh)
++      customPostDataText,
++      customRequestHeaders,
++      originalRequestURI
++      );
+ 
+   return NS_OK;
+ }
+ 
+ nsresult LoadInfoArgsToLoadInfo(const LoadInfoArgs& aLoadInfoArgs,
+                                 const nsACString& aOriginRemoteType,
+                                 nsILoadInfo** outLoadInfo) {
+@@ -897,14 +911,25 @@ nsresult LoadInfoArgsToLoadInfo(const LoadInfoArgs& loadInfoArgs,
+       loadInfoArgs.originTrialCoepCredentiallessEnabledForTopLevel(),
+       loadInfoArgs.unstrippedURI(), interceptionInfo,
+       loadInfoArgs.hasInjectedCookieForCookieBannerHandling(),
+       loadInfoArgs.schemelessInput(), loadInfoArgs.httpsUpgradeTelemetry(),
+       loadInfoArgs.isNewWindowTarget(),
+       loadInfoArgs.userNavigationInvolvement());
+ 
++  //We didn't add these to the constructor args list in LoadInfo because why
++  //would we.
++  // Add our field after construction
++  nsresult rv = loadInfo->SetCustomPostDataText(loadInfoArgs.customPostDataText());
++  NS_ENSURE_SUCCESS(rv, rv);
++  rv = loadInfo->SetCustomRequestHeaders(loadInfoArgs.customRequestHeaders());
++  NS_ENSURE_SUCCESS(rv, rv);
++  rv = loadInfo->SetOriginalRequestURI(loadInfoArgs.originalRequestURI());
++  NS_ENSURE_SUCCESS(rv, rv);
++
++
+   if (loadInfoArgs.isFromProcessingFrameAttributes()) {
+     loadInfo->SetIsFromProcessingFrameAttributes();
+   }
+ 
+   if (loadInfoArgs.isMediaRequest()) {
+     loadInfo->SetIsMediaRequest(true);
+ 
+@@ -960,14 +985,26 @@ void LoadInfoToParentLoadInfoForwarder(
+       aLoadInfo->GetOverriddenFingerprintingSettings();
+ 
+   if (overriddenFingerprintingSettings) {
+     overriddenFingerprintingSettingsArg =
+         Some(overriddenFingerprintingSettings.ref());
+   }
+ 
++  nsAutoString customPostData;
++  aLoadInfo->GetCustomPostDataText(customPostData);
++  nsCString customPostDataUTF8 = NS_ConvertUTF16toUTF8(customPostData);
++
++  nsAutoString customRH;
++  aLoadInfo->GetCustomRequestHeaders(customRH);
++  nsCString customRHUTF8 = NS_ConvertUTF16toUTF8(customRH);
++
++  nsAutoString originalRURI;
++  aLoadInfo->GetOriginalRequestURI(originalRURI);
++  nsCString originalRURIUTF8 = NS_ConvertUTF16toUTF8(originalRURI);
++
+   *aForwarderArgsOut = ParentLoadInfoForwarderArgs(
+       aLoadInfo->GetAllowInsecureRedirectToDataURI(), ipcController, tainting,
+       aLoadInfo->GetSkipContentSniffing(), aLoadInfo->GetHttpsOnlyStatus(),
+       aLoadInfo->GetSchemelessInput(), aLoadInfo->GetHttpsUpgradeTelemetry(),
+       aLoadInfo->GetHstsStatus(), aLoadInfo->GetHasValidUserGestureActivation(),
+       aLoadInfo->GetTextDirectiveUserActivation(),
+       aLoadInfo->GetAllowDeprecatedSystemRequests(),
+@@ -979,15 +1016,19 @@ void LoadInfoToParentLoadInfoForwarder(
+       aLoadInfo->GetDocumentHasUserInteracted(),
+       aLoadInfo->GetAllowListFutureDocumentsCreatedFromThisRedirectChain(),
+       cookieJarSettingsArgs, aLoadInfo->GetContainerFeaturePolicyInfo(),
+       aLoadInfo->GetRequestBlockingReason(), aLoadInfo->GetStoragePermission(),
+       overriddenFingerprintingSettingsArg, aLoadInfo->GetIsMetaRefresh(),
+       isThirdPartyContextToTopWindow, aLoadInfo->GetIsInThirdPartyContext(),
+       aLoadInfo->GetIsOn3PCBExceptionList(), unstrippedURI,
+-      aLoadInfo->GetUserNavigationInvolvement());
++      aLoadInfo->GetUserNavigationInvolvement(),
++      !customPostDataUTF8.IsEmpty() ? mozilla::Some(customPostDataUTF8) : mozilla::Nothing()
++      ,!customRHUTF8.IsEmpty() ? mozilla::Some(customRHUTF8) : mozilla::Nothing()
++      ,!originalRURIUTF8.IsEmpty() ? mozilla::Some(originalRURIUTF8) : mozilla::Nothing()
++        );
+ }
+ 
+ nsresult MergeParentLoadInfoForwarder(
+     ParentLoadInfoForwarderArgs const& aForwarderArgs, nsILoadInfo* aLoadInfo) {
+   nsresult rv;
+ 
+   rv = aLoadInfo->SetAllowInsecureRedirectToDataURI(
+@@ -1110,14 +1151,30 @@ nsresult MergeParentLoadInfoForwarder(
+     aLoadInfo->SetContainerFeaturePolicyInfo(
+         *aForwarderArgs.containerFeaturePolicyInfo());
+   }
+ 
+   aLoadInfo->SetUserNavigationInvolvement(
+       uint8_t(aForwarderArgs.userNavigationInvolvement()));
+ 
++  if (aForwarderArgs.customPostDataText().isSome()) {
++    rv = aLoadInfo->SetCustomPostDataText(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.customPostDataText().ref()));
++    NS_ENSURE_SUCCESS(rv, rv);
++  }
++  if (aForwarderArgs.customRequestHeaders().isSome()) {
++    rv = aLoadInfo->SetCustomRequestHeaders(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.customRequestHeaders().ref()));
++    NS_ENSURE_SUCCESS(rv, rv);
++  }
++  if (aForwarderArgs.originalRequestURI().isSome()) {
++    rv = aLoadInfo->SetOriginalRequestURI(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.originalRequestURI().ref()));
++    NS_ENSURE_SUCCESS(rv, rv);
++  }
++
+   return NS_OK;
+ }
+ 
+ void LoadInfoToChildLoadInfoForwarder(
+     nsILoadInfo* aLoadInfo, ChildLoadInfoForwarderArgs* aForwarderArgsOut) {
+   Maybe<IPCClientInfo> ipcReserved;
+   Maybe<ClientInfo> reserved(aLoadInfo->GetReservedClientInfo());
+diff --git a/netwerk/base/LoadInfo.cpp b/netwerk/base/LoadInfo.cpp
+index 1ec2c64193..99a2d75019 100644
+--- a/netwerk/base/LoadInfo.cpp
++++ b/netwerk/base/LoadInfo.cpp
+@@ -99,14 +99,46 @@ static nsContentPolicyType InternalContentPolicyTypeForFrame(
+     nsContentPolicyType aContentPolicyType, nsSecurityFlags aSecurityFlags,
+     uint32_t aSandboxFlags) {
+   return MakeAndAddRef<LoadInfo>(
+       aParentWGP, aTriggeringPrincipal, aParentWGP->GetRemoteType(),
+       aContentPolicyType, aSecurityFlags, aSandboxFlags);
+ }
+ 
++NS_IMETHODIMP
++LoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
++  aCustomPostDataText = mCustomPostDataText; // New: Return our string
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++LoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
++  mCustomPostDataText = aCustomPostDataText; // New: Set our string
++  return NS_OK;
++}
++
++NS_IMETHODIMP LoadInfo::SetCustomRequestHeaders(const nsAString& aHeaders) {
++  mCustomRequestHeaders = aHeaders;
++  return NS_OK;
++}
++
++NS_IMETHODIMP LoadInfo::GetCustomRequestHeaders(nsAString& aHeaders) {
++  aHeaders = mCustomRequestHeaders;
++  return NS_OK;
++}
++
++NS_IMETHODIMP LoadInfo::SetOriginalRequestURI(const nsAString& aOrigRURI) {
++  mOriginalRequestURI = aOrigRURI;
++  return NS_OK;
++}
++
++NS_IMETHODIMP LoadInfo::GetOriginalRequestURI(nsAString& aOrigRURI) {
++  aOrigRURI = mOriginalRequestURI;
++  return NS_OK;
++}
++
+ LoadInfo::LoadInfo(
+     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
+     nsINode* aLoadingContext, nsSecurityFlags aSecurityFlags,
+     nsContentPolicyType aContentPolicyType,
+     const Maybe<mozilla::dom::ClientInfo>& aLoadingClientInfo,
+     const Maybe<mozilla::dom::ServiceWorkerDescriptor>& aController,
+     uint32_t aSandboxFlags)
+@@ -117,15 +149,20 @@ LoadInfo::LoadInfo(
+       mTriggeringRemoteType(CurrentRemoteType()),
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mClientInfo(aLoadingClientInfo),
+       mController(aController),
+       mLoadingContext(do_GetWeakReference(aLoadingContext)),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(aContentPolicyType) {
++      mInternalContentPolicyType(aContentPolicyType),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText(),
++      mCustomRequestHeaders(),
++      mOriginalRequestURI()
++{
+   MOZ_ASSERT(mLoadingPrincipal);
+   MOZ_ASSERT(mTriggeringPrincipal);
+ 
+ #ifdef DEBUG
+   // TYPE_DOCUMENT loads initiated by javascript tests will go through
+   // nsIOService and use the wrong constructor.  Don't enforce the
+   // !TYPE_DOCUMENT check in those cases
+@@ -330,15 +367,20 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow, nsIURI* aURI,
+                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
+     : mTriggeringPrincipal(aTriggeringPrincipal),
+       mTriggeringRemoteType(CurrentRemoteType()),
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mContextForTopLevelLoad(do_GetWeakReference(aContextForTopLevelLoad)),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT) {
++      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText(),
++      mCustomRequestHeaders(),
++      mOriginalRequestURI()
++{
+   // Top-level loads are never third-party
+   // Grab the information we can out of the window.
+   MOZ_ASSERT(aOuterWindow);
+   MOZ_ASSERT(mTriggeringPrincipal);
+ 
+   // if the load is sandboxed, we can not also inherit the principal
+   if (mSandboxFlags & SANDBOXED_ORIGIN) {
+@@ -395,15 +437,20 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
+                    const OriginAttributes& aOriginAttributes,
+                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
+     : mTriggeringPrincipal(aTriggeringPrincipal),
+       mTriggeringRemoteType(aTriggeringRemoteType),
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT) {
++      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText(),
++      mCustomRequestHeaders(),
++      mOriginalRequestURI()
++{
+   // Top-level loads are never third-party
+   // Grab the information we can out of the window.
+   MOZ_ASSERT(aBrowsingContext);
+   MOZ_ASSERT(mTriggeringPrincipal);
+   MOZ_ASSERT(aSecurityFlags !=
+              nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK);
+ 
+@@ -488,15 +535,20 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
+                    nsContentPolicyType aContentPolicyType,
+                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
+     : mTriggeringPrincipal(aTriggeringPrincipal),
+       mTriggeringRemoteType(aTriggeringRemoteType),
+       mSandboxedNullPrincipalID(nsID::GenerateUUID()),
+       mSecurityFlags(aSecurityFlags),
+       mSandboxFlags(aSandboxFlags),
+-      mInternalContentPolicyType(aContentPolicyType) {
++      mInternalContentPolicyType(aContentPolicyType),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText(),
++      mCustomRequestHeaders(),
++      mOriginalRequestURI()
++{
+   CanonicalBrowsingContext* parentBC = aParentWGP->BrowsingContext();
+   MOZ_ASSERT(parentBC);
+   ComputeAncestors(parentBC, mAncestorPrincipals, mAncestorBrowsingContextIDs);
+ 
+   RefPtr<WindowGlobalParent> topLevelWGP = aParentWGP->TopWindowContext();
+ 
+   // if the load is sandboxed, we can not also inherit the principal
+@@ -692,15 +744,20 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
+           rhs.mIsOriginTrialCoepCredentiallessEnabledForTopLevel),
+       mUnstrippedURI(rhs.mUnstrippedURI),
+       mInterceptionInfo(rhs.mInterceptionInfo),
+       mHasInjectedCookieForCookieBannerHandling(
+           rhs.mHasInjectedCookieForCookieBannerHandling),
+       mSchemelessInput(rhs.mSchemelessInput),
+       mHttpsUpgradeTelemetry(rhs.mHttpsUpgradeTelemetry),
+-      mIsNewWindowTarget(rhs.mIsNewWindowTarget) {
++      mIsNewWindowTarget(rhs.mIsNewWindowTarget),
++      // Changed: Add our field
++      mCustomPostDataText(rhs.mCustomPostDataText),
++      mCustomRequestHeaders(rhs.mCustomRequestHeaders),
++      mOriginalRequestURI(rhs.mOriginalRequestURI)
++{
+ }
+ 
+ LoadInfo::LoadInfo(
+     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
+     nsIPrincipal* aPrincipalToInherit, nsIPrincipal* aTopLevelPrincipal,
+     nsIURI* aResultPrincipalURI, nsICookieJarSettings* aCookieJarSettings,
+     nsIContentSecurityPolicy* aCspToInherit,
+@@ -830,15 +887,20 @@ LoadInfo::LoadInfo(
+       mUnstrippedURI(aUnstrippedURI),
+       mInterceptionInfo(aInterceptionInfo),
+       mHasInjectedCookieForCookieBannerHandling(
+           aHasInjectedCookieForCookieBannerHandling),
+       mSchemelessInput(aSchemelessInput),
+       mHttpsUpgradeTelemetry(aHttpsUpgradeTelemetry),
+       mUserNavigationInvolvement(aUserNavigationInvolvement),
+-      mIsNewWindowTarget(aIsNewWindowTarget) {
++      mIsNewWindowTarget(aIsNewWindowTarget),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText(),
++      mCustomRequestHeaders(),
++      mOriginalRequestURI()
++{
+   // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
+   MOZ_ASSERT(mLoadingPrincipal ||
+              aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT);
+   MOZ_ASSERT(mTriggeringPrincipal);
+ }
+ 
+ // static
+diff --git a/netwerk/base/LoadInfo.h b/netwerk/base/LoadInfo.h
+index 93cc8d3630..52e8cfc716 100644
+--- a/netwerk/base/LoadInfo.h
++++ b/netwerk/base/LoadInfo.h
+@@ -422,14 +422,18 @@ class LoadInfo final : public nsILoadInfo {
+       nsILoadInfo::NOT_INITIALIZED;
+ 
+   dom::UserNavigationInvolvement mUserNavigationInvolvement =
+       dom::UserNavigationInvolvement::None;
+ 
+   bool mIsNewWindowTarget = false;
+   bool mSkipHTTPSUpgrade = false;
++
++  nsString mCustomPostDataText; // Add this
++  nsString mCustomRequestHeaders; // Add this
++  nsString mOriginalRequestURI; // Add this
+ };
+ 
+ // This is exposed solely for testing purposes and should not be used outside of
+ // LoadInfo
+ already_AddRefed<nsIPrincipal> CreateTruncatedPrincipal(nsIPrincipal*);
+ 
+ }  // namespace net
+diff --git a/netwerk/base/TRRLoadInfo.cpp b/netwerk/base/TRRLoadInfo.cpp
+index d1650595f8..17730623e1 100644
+--- a/netwerk/base/TRRLoadInfo.cpp
++++ b/netwerk/base/TRRLoadInfo.cpp
+@@ -1,14 +1,15 @@
+ /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+ /* vim: set ts=8 sts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "TRRLoadInfo.h"
++
+ #include "mozilla/dom/ClientSource.h"
+ #include "mozilla/dom/FeaturePolicy.h"
+ #include "mozilla/dom/DOMTypes.h"
+ #include "nsContentUtils.h"
+ #include "nsIRedirectHistoryEntry.h"
+ 
+ using namespace mozilla::dom;
+@@ -17,20 +18,52 @@ namespace mozilla {
+ namespace net {
+ 
+ NS_IMPL_ISUPPORTS(TRRLoadInfo, nsILoadInfo)
+ 
+ TRRLoadInfo::TRRLoadInfo(nsIURI* aResultPrincipalURI,
+                          nsContentPolicyType aContentPolicyType)
+     : mResultPrincipalURI(aResultPrincipalURI),
+-      mInternalContentPolicyType(aContentPolicyType) {}
++      mInternalContentPolicyType(aContentPolicyType),
++      // Changed: Explicitly init to empty
++      mCustomPostDataText(),
++      mCustomRequestHeaders(),
++      mOriginalRequestURI()
++  {
++  }
+ 
+ already_AddRefed<nsILoadInfo> TRRLoadInfo::Clone() const {
+   nsCOMPtr<nsILoadInfo> loadInfo =
+       new TRRLoadInfo(mResultPrincipalURI, mInternalContentPolicyType);
+ 
++  // Changed: Copy customPostDataText
++  nsAutoString customPostData;
++  // Use const_cast to call non-const getter—safe here (read-only)
++  const_cast<TRRLoadInfo*>(this)->GetCustomPostDataText(customPostData);
++  if (!customPostData.IsEmpty()) {
++    loadInfo->SetCustomPostDataText(customPostData);
++  } else {
++    printf("TRRLoadInfo::Clone() no customPostDataText to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
++  }
++  nsAutoString customRH;
++  // Use const_cast to call non-const getter—safe here (read-only)
++  const_cast<TRRLoadInfo*>(this)->GetCustomRequestHeaders(customRH);
++  if (!customRH.IsEmpty()) {
++    loadInfo->SetCustomRequestHeaders(customRH);
++  } else {
++    printf("TRRLoadInfo::Clone() no customRequestHeaders to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
++  }
++  nsAutoString originalRURI;
++  // Use const_cast to call non-const getter—safe here (read-only)
++  const_cast<TRRLoadInfo*>(this)->GetOriginalRequestURI(originalRURI);
++  if (!originalRURI.IsEmpty()) {
++    loadInfo->SetOriginalRequestURI(originalRURI);
++  } else {
++    printf("TRRLoadInfo::Clone() no originalRequestURI to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
++  }
++
+   return loadInfo.forget();
+ }
+ 
+ NS_IMETHODIMP
+ TRRLoadInfo::GetLoadingPrincipal(nsIPrincipal** aLoadingPrincipal) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+@@ -946,9 +979,41 @@ TRRLoadInfo::SetSkipHTTPSUpgrade(bool aSkipHTTPSUpgrade) {
+ }
+ 
+ NS_IMETHODIMP
+ TRRLoadInfo::GetFetchDestination(nsACString& aDestination) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
++NS_IMETHODIMP
++TRRLoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
++  aCustomPostDataText = mCustomPostDataText;
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++TRRLoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
++  mCustomPostDataText = aCustomPostDataText;
++  return NS_OK;
++}
++
++NS_IMETHODIMP TRRLoadInfo::SetCustomRequestHeaders(const nsAString& aHeaders) {
++  mCustomRequestHeaders = aHeaders;
++  return NS_OK;
++}
++
++NS_IMETHODIMP TRRLoadInfo::GetCustomRequestHeaders(nsAString& aHeaders) {
++  aHeaders = mCustomRequestHeaders;
++  return NS_OK;
++}
++
++NS_IMETHODIMP TRRLoadInfo::SetOriginalRequestURI(const nsAString& aOrigRURI) {
++  mOriginalRequestURI = aOrigRURI;
++  return NS_OK;
++}
++
++NS_IMETHODIMP TRRLoadInfo::GetOriginalRequestURI(nsAString& aOrigRURI) {
++  aOrigRURI = mOriginalRequestURI;
++  return NS_OK;
++}
++
+ }  // namespace net
+ }  // namespace mozilla
+diff --git a/netwerk/base/TRRLoadInfo.h b/netwerk/base/TRRLoadInfo.h
+index 25f588c96f..5fb944e44d 100644
+--- a/netwerk/base/TRRLoadInfo.h
++++ b/netwerk/base/TRRLoadInfo.h
+@@ -42,13 +42,18 @@ class TRRLoadInfo final : public nsILoadInfo {
+   nsTArray<nsCString> mCorsUnsafeHeaders;
+   nsID mSandboxedNullPrincipalID;
+   Maybe<mozilla::dom::ClientInfo> mClientInfo;
+   Maybe<mozilla::dom::ClientInfo> mReservedClientInfo;
+   Maybe<mozilla::dom::ClientInfo> mInitialClientInfo;
+   Maybe<mozilla::dom::ServiceWorkerDescriptor> mController;
+   Maybe<RFPTargetSet> mOverriddenFingerprintingSettings;
++
++  // Changed: Add our own field(s)
++  nsString mCustomPostDataText;
++  nsString mCustomRequestHeaders;
++  nsString mOriginalRequestURI;
+ };
+ 
+ }  // namespace net
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_TRRLoadInfo_h
+diff --git a/netwerk/base/nsILoadInfo.idl b/netwerk/base/nsILoadInfo.idl
+index 774ec045c0..ff64c617e2 100644
+--- a/netwerk/base/nsILoadInfo.idl
++++ b/netwerk/base/nsILoadInfo.idl
+@@ -68,15 +68,15 @@ typedef unsigned long nsSecurityFlags;
+  * was started, and how we plan on using the resulting response.
+  * If a network request is redirected, the new channel will receive a new
+  * LoadInfo object. The new object will contain mostly the same
+  * information as the pre-redirect one, but updated as appropriate.
+  * For detailed information about what parts of LoadInfo are updated on
+  * redirect, see documentation on individual properties.
+  */
+-[scriptable, builtinclass, uuid(ddc65bf9-2f60-41ab-b22a-4f1ae9efcd36)]
++[scriptable, builtinclass, uuid(a3361830-8a97-44d6-9b6b-64900e4d201c)]
+ interface nsILoadInfo : nsISupports
+ {
+   /**
+    * The following five flags determine the security mode and hence what kind of
+    * security checks should be performed throughout the lifetime of the channel.
+    *
+    *    * SEC_REQUIRE_SAME_ORIGIN_INHERITS_SEC_CONTEXT
+@@ -256,14 +256,15 @@ interface nsILoadInfo : nsISupports
+    * content principals, then we will always call into
+    * nsIContentPolicies and CheckLoadURI. The call to nsIContentPolicies
+    * and CheckLoadURI happen even if the URI to be loaded is same-origin
+    * with the loadingPrincipal or triggeringPrincipal.
+    */
+   readonly attribute nsIPrincipal loadingPrincipal;
+ 
++
+   /**
+    * A C++-friendly version of triggeringPrincipal.
+    *
+    * This is a bit awkward because we can't use
+    * binaryname(GetLoadingPrincipal).
+    */
+   [noscript, notxpcom, nostdcall]
+@@ -1622,8 +1623,12 @@ interface nsILoadInfo : nsISupports
+       uint8_t userNavigationInvolvement = 0;
+       mozilla::DebugOnly<nsresult> rv = GetUserNavigationInvolvement(&userNavigationInvolvement);
+       MOZ_ASSERT(NS_SUCCEEDED(rv));
+       MOZ_DIAGNOSTIC_ASSERT(userNavigationInvolvement < 3);
+       return static_cast<mozilla::dom::UserNavigationInvolvement>(userNavigationInvolvement);
+     }
+ %}
++
++  attribute AString customPostDataText;
++  attribute AString customRequestHeaders;
++  attribute AString originalRequestURI;
+ };
+diff --git a/netwerk/ipc/NeckoChannelParams.ipdlh b/netwerk/ipc/NeckoChannelParams.ipdlh
+index 0924673e59..ca6a014e44 100644
+--- a/netwerk/ipc/NeckoChannelParams.ipdlh
++++ b/netwerk/ipc/NeckoChannelParams.ipdlh
+@@ -200,14 +200,19 @@ struct LoadInfoArgs
+   bool                        isMetaRefresh;
+   CrossOriginEmbedderPolicy   loadingEmbedderPolicy;
+   bool                        originTrialCoepCredentiallessEnabledForTopLevel;
+   nullable nsIURI             unstrippedURI;
+   InterceptionInfoArg?        interceptionInfo;
+   bool                        isNewWindowTarget;
+   UserNavigationInvolvement   userNavigationInvolvement;
++  // MODIFIED: Add our field(s)
++  nsString customPostDataText;
++  nsString customRequestHeaders;
++  nsString originalRequestURI;
++  // END MODIFIED
+ };
+ 
+ /**
+  * This structure is used to carry selected properties of a LoadInfo
+  * object to child processes to merge LoadInfo changes from the parent
+  * process.  We don't want to use LoadInfoArgs for that since it's
+  * too huge and we only care about small subpart of properties anyway.
+@@ -297,14 +302,18 @@ struct ParentLoadInfoForwarderArgs
+ 
+   bool isOn3PCBExceptionList;
+ 
+   nullable nsIURI unstrippedURI;
+ 
+   UserNavigationInvolvement userNavigationInvolvement;
+ 
++  nsCString? customPostDataText;  // Added this.
++  nsCString? customRequestHeaders;  // Added this.
++  nsCString? originalRequestURI;  // Added this.
++
+   // IMPORTANT: when you add new properites here you must also update
+   // LoadInfoToParentLoadInfoForwarder and MergeParentLoadInfoForwarder
+   // in BackgroundUtils.cpp/.h!
+ };
+ 
+ /**
+  * This structure is used to carry selected properties of a LoadInfo
+diff --git a/netwerk/protocol/data/DataChannelChild.cpp b/netwerk/protocol/data/DataChannelChild.cpp
+index a85895cb14..47c5c6e9cb 100644
+--- a/netwerk/protocol/data/DataChannelChild.cpp
++++ b/netwerk/protocol/data/DataChannelChild.cpp
+@@ -28,15 +28,16 @@ DataChannelChild::DataChannelChild(nsIURI* aURI)
+   }
+ }
+ 
+ NS_IMETHODIMP
+ DataChannelChild::ConnectParent(uint32_t aId) {
+   MOZ_ASSERT(mIPCOpen);
+ 
+-  SendSetChannelIdForRedirect(aId);
++  SendSetChannelIdForRedirect(aId); //original line
++
+   return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
+ DataChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+   nsresult rv;
+   rv = AsyncOpen(aListener);
+diff --git a/netwerk/protocol/http/HttpChannelChild.cpp b/netwerk/protocol/http/HttpChannelChild.cpp
+index 5a38d5a035..478b6491ab 100644
+--- a/netwerk/protocol/http/HttpChannelChild.cpp
++++ b/netwerk/protocol/http/HttpChannelChild.cpp
+@@ -64,14 +64,16 @@
+ #include "nsRedirectHistoryEntry.h"
+ #include "nsSocketTransportService2.h"
+ #include "nsStreamUtils.h"
+ #include "nsThreadUtils.h"
+ #include "nsCORSListenerProxy.h"
+ #include "nsIOService.h"
+ 
++#include "nsString.h"
++
+ #include <functional>
+ 
+ using namespace mozilla::dom;
+ using namespace mozilla::ipc;
+ 
+ namespace mozilla::net {
+ 
+@@ -151,14 +153,22 @@ HttpChannelChild::~HttpChannelChild() {
+ #endif
+ 
+   mEventQ->NotifyReleasingOwner();
+ 
+   ReleaseMainThreadOnlyReferences();
+ }
+ 
++NS_IMETHODIMP
++HttpChannelChild::GetPostDataText(nsAString& aPostDataText) {
++  //TODO: unclear why I needed to do this?
++  printf("!!!!! in HttpChannelChild::GetPostDataText() returning empty string. Needed?\n");
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ void HttpChannelChild::ReleaseMainThreadOnlyReferences() {
+   if (NS_IsMainThread()) {
+     // Already on main thread, let dtor to
+     // take care of releasing references
+     return;
+   }
+ 
+@@ -1553,14 +1563,15 @@ nsresult HttpChannelChild::SetupRedirect(nsIURI* uri,
+   nsCOMPtr<nsIIOService> ioService;
+   rv = gHttpHandler->GetIOService(getter_AddRefs(ioService));
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
+   nsCOMPtr<nsIChannel> newChannel;
+   nsCOMPtr<nsILoadInfo> redirectLoadInfo =
+       CloneLoadInfoForRedirect(uri, redirectFlags);
++  
+   rv = NS_NewChannelInternal(getter_AddRefs(newChannel), uri, redirectLoadInfo,
+                              nullptr,  // PerformanceStorage
+                              nullptr,  // aLoadGroup
+                              nullptr,  // aCallbacks
+                              nsIRequest::LOAD_NORMAL, ioService);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
+@@ -1626,25 +1637,43 @@ void HttpChannelChild::Redirect1Begin(
+       // Set the channelId allocated in parent to the child instance
+       nsCOMPtr<nsIHttpChannel> httpChannel =
+           do_QueryInterface(mRedirectChannelChild);
+       if (httpChannel) {
+         rv = httpChannel->SetChannelId(channelId);
+         MOZ_ASSERT(NS_SUCCEEDED(rv));
+       }
+-      mRedirectChannelChild->ConnectParent(registrarId);
+-    }
++
++      rv = mRedirectChannelChild->ConnectParent(registrarId);//original line!mod
++      if (NS_FAILED(rv)) {
++        printf("Redirect1Begin ConnectParent failed rv=%x this=%p\n",
++            static_cast<unsigned>(rv), this);
++      }
++
++      //TODO: remove this block:
++      nsCOMPtr<nsIChannel> redirectChan = do_QueryInterface(mRedirectChannelChild);
++      nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
++      nsCOMPtr<nsISerializable> serializable = do_QueryInterface(redirectLoadInfo);
++      if (!serializable) {
++        //XXX: this does get hit for CORS-blocked data-channel transformed requests.
++        printf("Redirect1Begin LoadInfo not serializable\n");
++      }
++    } // keep!
+ 
+     nsCOMPtr<nsISerialEventTarget> target = GetNeckoTarget();
+     MOZ_ASSERT(target);
+ 
+     rv = gHttpHandler->AsyncOnChannelRedirect(this, newChannel, redirectFlags,
+                                               target);
+   }
+ 
+-  if (NS_FAILED(rv)) OnRedirectVerifyCallback(rv);
++  if (NS_FAILED(rv)) {
++    //TODO: remove?:
++    printf("HttpChannelChild::Redirect1Begin() failed so calling OnRedirectVerifyCallback next.\n");
++    OnRedirectVerifyCallback(rv);
++  }
+ }
+ 
+ mozilla::ipc::IPCResult HttpChannelChild::RecvRedirect3Complete() {
+   LOG(("HttpChannelChild::RecvRedirect3Complete [this=%p]\n", this));
+   nsCOMPtr<nsIChannel> redirectChannel =
+       do_QueryInterface(mRedirectChannelChild);
+   MOZ_ASSERT(redirectChannel);
+@@ -1892,14 +1921,31 @@ HttpChannelChild::ConnectParent(uint32_t registrarId) {
+   mEventQ->Suspend();
+   MOZ_ASSERT(!mSuspendForWaitCompleteRedirectSetup);
+   mSuspendForWaitCompleteRedirectSetup = true;
+ 
+   // Connect to socket process after mEventQ is suspended.
+   MaybeConnectToSocketProcess();
+ 
++  if (mRedirectChannelChild) {
++    nsCOMPtr<nsIChannel> redirectChan = do_QueryInterface(mRedirectChannelChild);
++    nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
++    nsAutoString postData;
++    nsAutoString requestHeaders;
++    nsAutoString originalRequestURI;
++    mLoadInfo->GetCustomPostDataText(postData);
++    mLoadInfo->GetCustomRequestHeaders(requestHeaders);
++    mLoadInfo->GetOriginalRequestURI(originalRequestURI);
++    redirectLoadInfo->SetCustomPostDataText(postData);
++    redirectLoadInfo->SetCustomRequestHeaders(requestHeaders);
++    redirectLoadInfo->SetOriginalRequestURI(originalRequestURI);
++  } else {
++    //XXX: triggers but unclear when.
++    printf("no mRedirectChannelChild in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
++  }
++
+   return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
+ HttpChannelChild::CompleteRedirectSetup(nsIStreamListener* aListener) {
+   LOG(("HttpChannelChild::CompleteRedirectSetup [this=%p]\n", this));
+   MOZ_ASSERT(NS_IsMainThread());
+@@ -1991,14 +2037,34 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult aResult) {
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+     rv = newHttpChannelChild->GetClientSetRequestHeaders(&headerTuples);
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+     newHttpChannelChild->GetClientSetCorsPreflightParameters(corsPreflightArgs);
+   }
+ 
+   if (NS_SUCCEEDED(aResult)) {
++    if (mRedirectChannelChild) {
++      nsCOMPtr<nsIChannel> redirectChan = do_QueryInterface(mRedirectChannelChild);
++      nsCOMPtr<nsIIdentChannel> redirectIdent = do_QueryInterface(mRedirectChannelChild);
++      nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
++      nsAutoString postData;
++      mLoadInfo->GetCustomPostDataText(postData);
++      redirectLoadInfo->SetCustomPostDataText(postData);
++      nsAutoString requestHeaders;
++      mLoadInfo->GetCustomRequestHeaders(requestHeaders);
++      redirectLoadInfo->SetCustomRequestHeaders(requestHeaders);
++      nsAutoString originalRequestURI;
++      mLoadInfo->GetOriginalRequestURI(originalRequestURI);
++      redirectLoadInfo->SetOriginalRequestURI(originalRequestURI);
++      uint64_t redirectId = 0;
++      if (redirectIdent) {
++        nsresult rv = redirectIdent->GetChannelId(&redirectId);
++        NS_ENSURE_SUCCESS(rv, rv);
++      }
++    }
++
+     // Note: this is where we would notify "http-on-modify-response" observers.
+     // We have deliberately disabled this for child processes (see bug 806753)
+     //
+     // After we verify redirect, nsHttpChannel may hit the network: must give
+     // "http-on-modify-request" observers the chance to cancel before that.
+     // base->CallOnModifyRequestObservers();
+ 
+diff --git a/netwerk/protocol/http/HttpChannelChild.h b/netwerk/protocol/http/HttpChannelChild.h
+index c952065b91..e44bb33fe1 100644
+--- a/netwerk/protocol/http/HttpChannelChild.h
++++ b/netwerk/protocol/http/HttpChannelChild.h
+@@ -71,14 +71,17 @@ class HttpChannelChild final : public PHttpChannelChild,
+   NS_DECL_NSIHTTPCHANNELCHILD
+   NS_DECL_NSIMULTIPARTCHANNEL
+   NS_DECL_NSITHREADRETARGETABLEREQUEST
+   NS_DECLARE_STATIC_IID_ACCESSOR(HTTP_CHANNEL_CHILD_IID)
+ 
+   HttpChannelChild();
+ 
++  //XXX: needed here to avoid: unimplemented pure virtual method 'GetPostDataText' in 'HttpChannelChild'
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   // Methods HttpBaseChannel didn't implement for us or that we override.
+   //
+   // nsIRequest
+   NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
+   NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+   NS_IMETHOD CancelWithReason(nsresult status,
+                               const nsACString& reason) override;
+diff --git a/netwerk/protocol/http/HttpChannelParent.cpp b/netwerk/protocol/http/HttpChannelParent.cpp
+index 03ec882a2d..69b7ccf2ce 100644
+--- a/netwerk/protocol/http/HttpChannelParent.cpp
++++ b/netwerk/protocol/http/HttpChannelParent.cpp
+@@ -1798,15 +1798,20 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   mRedirectChannelId = nsContentUtils::GenerateLoadIdentifier();
+   rv = registrar->RegisterChannel(newChannel, mRedirectChannelId);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
+   LOG(("Registered %p channel under id=%" PRIx64, newChannel,
+        mRedirectChannelId));
+ 
++    // Debug mChannel's LoadInfo before redirect logic
++  nsCOMPtr<nsILoadInfo> origLoadInfo = mChannel->LoadInfo();
++
+   if (mIPCClosed) {
++    //TODO: remove
++    printf("!!!!!!!! NS_BINDING_ABORTED in HttpChannelParent::StartRedirect\n");
+     return NS_BINDING_ABORTED;
+   }
+ 
+   // If this is an internal redirect for service worker interception or
+   // internal redirect due to auth retries, then hide it from the child
+   // process.  The original e10s interception code was not designed with this
+   // in mind and its not necessary to replace the HttpChannelChild/Parent
+@@ -1863,14 +1868,16 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+       NS_ENSURE_SUCCESS(rv, rv);
+       MOZ_ASSERT(linkedChannel == newChannel);
+ 
+       // We immediately store the channel as our nested mChannel.
+       // None of the redirect IPC messaging takes place.
+       mChannel = do_QueryObject(newChannel);
+ 
++      // Debug after internal redirect
++
+       callback->OnRedirectVerifyCallback(NS_OK);
+       return NS_OK;
+     }
+   }
+ 
+   // Sending down the original URI, because that is the URI we have
+   // to construct the channel from - this is the URI we've been actually
+@@ -1911,20 +1918,22 @@ HttpChannelParent::StartRedirect(nsIChannel* newChannel, uint32_t redirectFlags,
+   }
+ 
+   if (!responseHead) {
+     responseHead = &cleanedUpResponseHead;
+   }
+ 
+   if (!mIPCClosed) {
++
+     cleanedUpResponseHead = *responseHead;
+     if (!SendRedirect1Begin(mRedirectChannelId, newOriginalURI, newLoadFlags,
+                             redirectFlags, loadInfoForwarderArg,
+                             std::move(cleanedUpResponseHead), securityInfo,
+                             channelId, mChannel->GetPeerAddr(),
+                             GetTimingAttributes(mChannel))) {
++      printf("!!!!!!!!!!! NS_BINDING_ABORTED number 2\n");
+       return NS_BINDING_ABORTED;
+     }
+   }
+ 
+   // Result is handled in RecvRedirect2Verify above
+ 
+   mRedirectChannel = newChannel;
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.cpp b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+index fbf4bdf1e2..723f92c962 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.cpp
++++ b/netwerk/protocol/http/InterceptedHttpChannel.cpp
+@@ -17,14 +17,16 @@
+ #include "nsIHttpHeaderVisitor.h"
+ #include "nsIRedirectResultListener.h"
+ #include "nsStringStream.h"
+ #include "nsStreamUtils.h"
+ #include "nsQueryObject.h"
+ #include "mozilla/Logging.h"
+ 
++#include "nsString.h" // For nsAString
++
+ namespace mozilla::net {
+ 
+ mozilla::LazyLogModule gInterceptedLog("Intercepted");
+ 
+ #define INTERCEPTED_LOG(args) MOZ_LOG(gInterceptedLog, LogLevel::Debug, args)
+ 
+ NS_IMPL_ISUPPORTS_INHERITED(InterceptedHttpChannel, HttpBaseChannel,
+@@ -65,14 +67,21 @@ void InterceptedHttpChannel::ReleaseListeners() {
+   mProgressSink = nullptr;
+   mBodyCallback = nullptr;
+   mPump = nullptr;
+ 
+   MOZ_DIAGNOSTIC_ASSERT(!LoadIsPending());
+ }
+ 
++NS_IMETHODIMP
++InterceptedHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  //TODO: why is this needed? as empty
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ nsresult InterceptedHttpChannel::SetupReplacementChannel(
+     nsIURI* aURI, nsIChannel* aChannel, bool aPreserveMethod,
+     uint32_t aRedirectFlags) {
+   INTERCEPTED_LOG(
+       ("InterceptedHttpChannel::SetupReplacementChannel [%p] flag: %u", this,
+        aRedirectFlags));
+   nsresult rv = HttpBaseChannel::SetupReplacementChannel(
+diff --git a/netwerk/protocol/http/InterceptedHttpChannel.h b/netwerk/protocol/http/InterceptedHttpChannel.h
+index 704404c9f0..9dddd7620c 100644
+--- a/netwerk/protocol/http/InterceptedHttpChannel.h
++++ b/netwerk/protocol/http/InterceptedHttpChannel.h
+@@ -217,14 +217,16 @@ class InterceptedHttpChannel final
+ 
+   void MaybeCallBodyCallback();
+ 
+   TimeStamp mServiceWorkerLaunchStart;
+   TimeStamp mServiceWorkerLaunchEnd;
+ 
+  public:
++  //XXX: needed here to avoid: unimplemented pure virtual method 'GetPostDataText'
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   static already_AddRefed<InterceptedHttpChannel> CreateForInterception(
+       PRTime aCreationTime, const TimeStamp& aCreationTimestamp,
+       const TimeStamp& aAsyncOpenTimestamp);
+ 
+   static already_AddRefed<InterceptedHttpChannel> CreateForSynthesis(
+       const nsHttpResponseHead* aHead, nsIInputStream* aBody,
+       nsIInterceptedBodyCallback* aBodyCallback, PRTime aCreationTime,
+diff --git a/netwerk/protocol/http/NullHttpChannel.cpp b/netwerk/protocol/http/NullHttpChannel.cpp
+index 1038ba82df..a0cabb76b4 100644
+--- a/netwerk/protocol/http/NullHttpChannel.cpp
++++ b/netwerk/protocol/http/NullHttpChannel.cpp
+@@ -3,14 +3,15 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "NullHttpChannel.h"
+ #include "nsContentUtils.h"
+ #include "nsContentSecurityManager.h"
+ #include "nsIScriptSecurityManager.h"
+ #include "nsIStreamListener.h"
++#include "nsString.h"
+ 
+ namespace mozilla {
+ namespace net {
+ 
+ NS_IMPL_ISUPPORTS(NullHttpChannel, nsINullChannel, nsIChannel, nsIHttpChannel,
+                   nsIIdentChannel, nsITimedChannel)
+ 
+@@ -53,14 +54,21 @@ nsresult NullHttpChannel::Init(nsIURI* aURI, uint32_t aCaps,
+ //-----------------------------------------------------------------------------
+ 
+ NS_IMETHODIMP
+ NullHttpChannel::GetChannelId(uint64_t* aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::NullHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  //TODO: why I need this? other than some base class has it and must impl. it here.
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP
+ NullHttpChannel::SetChannelId(uint64_t aChannelId) {
+   return NS_ERROR_NOT_IMPLEMENTED;
+ }
+ 
+ NS_IMETHODIMP
+ NullHttpChannel::GetTopLevelContentWindowId(uint64_t* aWindowId) {
+diff --git a/netwerk/protocol/http/NullHttpChannel.h b/netwerk/protocol/http/NullHttpChannel.h
+index 478d13e0a2..e3aa9ac904 100644
+--- a/netwerk/protocol/http/NullHttpChannel.h
++++ b/netwerk/protocol/http/NullHttpChannel.h
+@@ -52,13 +52,16 @@ class NullHttpChannel final : public nsINullChannel,
+   PRTime mChannelCreationTime;
+   TimeStamp mAsyncOpenTime;
+   TimeStamp mChannelCreationTimestamp;
+   nsCOMPtr<nsIPrincipal> mResourcePrincipal;
+   nsCString mTimingAllowOriginHeader;
+   bool mAllRedirectsSameOrigin{false};
+   bool mAllRedirectsPassTimingAllowCheck{false};
++// public:
++  //XXX: error: class member cannot be redeclared, it's in NS_DECL_NSIHTTPCHANNEL above!
++//  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+ };
+ 
+ }  // namespace net
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_net_NullHttpChannel_h
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.cpp b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+index 8b7059426c..92a37c071b 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.cpp
++++ b/netwerk/protocol/http/ObliviousHttpChannel.cpp
+@@ -9,14 +9,15 @@
+ #include "HttpLog.h"
+ 
+ #include "ObliviousHttpChannel.h"
+ 
+ #include "BinaryHttpRequest.h"
+ #include "nsIHttpHeaderVisitor.h"
+ #include "nsStringStream.h"
++#include "nsString.h"
+ 
+ namespace mozilla::net {
+ 
+ NS_IMPL_ISUPPORTS(ObliviousHttpChannel, nsIChannel, nsIHttpChannel,
+                   nsIObliviousHttpChannel, nsIHttpChannelInternal,
+                   nsIIdentChannel, nsIRequest, nsIRequestObserver,
+                   nsIStreamListener, nsIUploadChannel2, nsITimedChannel)
+@@ -31,14 +32,21 @@ ObliviousHttpChannel::ObliviousHttpChannel(
+       mInnerChannelTimed(do_QueryInterface(innerChannel)) {
+   LOG(("ObliviousHttpChannel ctor [this=%p]", this));
+   MOZ_ASSERT(mInnerChannel);
+   MOZ_ASSERT(mInnerChannelInternal);
+   MOZ_ASSERT(mInnerChannelTimed);
+ }
+ 
++NS_IMETHODIMP
++mozilla::net::ObliviousHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  //TODO: needed?
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ ObliviousHttpChannel::~ObliviousHttpChannel() {
+   LOG(("ObliviousHttpChannel dtor [this=%p]", this));
+ }
+ 
+ //-----------------------------------------------------------------------------
+ // ObliviousHttpChannel::nsIHttpChannel
+ //-----------------------------------------------------------------------------
+diff --git a/netwerk/protocol/http/ObliviousHttpChannel.h b/netwerk/protocol/http/ObliviousHttpChannel.h
+index 9dc9c9f689..4a110630bd 100644
+--- a/netwerk/protocol/http/ObliviousHttpChannel.h
++++ b/netwerk/protocol/http/ObliviousHttpChannel.h
+@@ -30,14 +30,16 @@ class ObliviousHttpChannel final : public nsIObliviousHttpChannel,
+   NS_DECL_NSICHANNEL
+   NS_DECL_NSIHTTPCHANNEL
+   NS_DECL_NSIOBLIVIOUSHTTPCHANNEL
+   NS_DECL_NSIREQUESTOBSERVER
+   NS_DECL_NSISTREAMLISTENER
+   NS_DECL_NSIUPLOADCHANNEL2
+ 
++  //XXX: error: class member cannot be redeclared, it's in NS_DECL_NSIHTTPCHANNEL above!
++//  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   ObliviousHttpChannel(nsIURI* targetURI,
+                        const nsTArray<uint8_t>& encodedConfig,
+                        nsIHttpChannel* innerChannel);
+ 
+   NS_FORWARD_SAFE_NSIREQUEST(mInnerChannel)
+   NS_FORWARD_SAFE_NSIIDENTCHANNEL(mInnerChannel)
+   NS_FORWARD_SAFE_NSIHTTPCHANNELINTERNAL(mInnerChannelInternal)
+diff --git a/netwerk/protocol/http/TRRServiceChannel.cpp b/netwerk/protocol/http/TRRServiceChannel.cpp
+index 58094fa024..a6a039e9c1 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.cpp
++++ b/netwerk/protocol/http/TRRServiceChannel.cpp
+@@ -26,14 +26,16 @@
+ #include "nsURLHelper.h"
+ #include "ProxyConfigLookup.h"
+ #include "TRRLoadInfo.h"
+ #include "ReferrerInfo.h"
+ #include "TRR.h"
+ #include "TRRService.h"
+ 
++#include "nsString.h"
++
+ namespace mozilla::net {
+ 
+ NS_IMPL_ADDREF(TRRServiceChannel)
+ 
+ // Because nsSupportsWeakReference isn't thread-safe we must ensure that
+ // TRRServiceChannel is destroyed on the target thread. Any Release() called
+ // on a different thread is dispatched to the target thread.
+@@ -46,14 +48,21 @@ bool TRRServiceChannel::DispatchRelease() {
+       NewNonOwningRunnableMethod("net::TRRServiceChannel::Release", this,
+                                  &TRRServiceChannel::Release),
+       NS_DISPATCH_NORMAL);
+ 
+   return true;
+ }
+ 
++NS_IMETHODIMP
++TRRServiceChannel::GetPostDataText(nsAString& aPostDataText) {
++  //TODO: needed?
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ NS_IMETHODIMP_(MozExternalRefCountType)
+ TRRServiceChannel::Release() {
+   nsrefcnt count = mRefCnt - 1;
+   if (DispatchRelease()) {
+     // Redispatched to the target thread.
+     return count;
+   }
+diff --git a/netwerk/protocol/http/TRRServiceChannel.h b/netwerk/protocol/http/TRRServiceChannel.h
+index d9365a592a..0bc6537d8e 100644
+--- a/netwerk/protocol/http/TRRServiceChannel.h
++++ b/netwerk/protocol/http/TRRServiceChannel.h
+@@ -43,14 +43,16 @@ class TRRServiceChannel : public HttpBaseChannel,
+   NS_DECL_NSIREQUESTOBSERVER
+   NS_DECL_NSISTREAMLISTENER
+   NS_DECL_NSITRANSPORTEVENTSINK
+   NS_DECL_NSIPROXIEDCHANNEL
+   NS_DECL_NSIPROTOCOLPROXYCALLBACK
+   NS_DECLARE_STATIC_IID_ACCESSOR(NS_TRRSERVICECHANNEL_IID)
+ 
++  //XXX: needed here to avoid: unimplemented pure virtual method 'GetPostDataText'
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
+   // nsIRequest
+   NS_IMETHOD SetCanceledReason(const nsACString& aReason) override;
+   NS_IMETHOD GetCanceledReason(nsACString& aReason) override;
+   NS_IMETHOD CancelWithReason(nsresult status,
+                               const nsACString& reason) override;
+   NS_IMETHOD Cancel(nsresult status) override;
+   NS_IMETHOD Suspend() override;
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+index e4479400a4..53f151c27e 100644
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -140,14 +140,22 @@
+ #ifdef XP_MACOSX
+ #  include "MicrosoftEntraSSOUtils.h"
+ #endif
+ #ifdef FUZZING
+ #  include "mozilla/StaticPrefs_fuzzing.h"
+ #endif
+ 
++#include "nsStreamUtils.h" // For NS_ReadInputStreamToString
++
++#include "nsIVariant.h"
++#include "nsString.h" //already included above, twice!
++#include "nsServiceManagerUtils.h"
++#include "nsILoadInfo.h"
++
++
+ namespace mozilla {
+ 
+ using namespace dom;
+ 
+ namespace net {
+ 
+ namespace {
+@@ -5227,14 +5235,16 @@ nsresult nsHttpChannel::ReadFromCache(void) {
+       LOG(("First response from cache"));
+       PROFILER_MARKER_TEXT(
+           "RCWN", NETWORK, {},
+           nsPrintfCString("Cache won for %s (%p)", mSpec.get(), this));
+       mFirstResponseSource = RESPONSE_FROM_CACHE;
+ 
+       // Cancel the transaction because we will serve the request from the cache
++      //TODO: was this ever hit?
++      printf("!!! will cancel request via NS_BINDING_ABORTED due to gonna serve it from cache.\n");
+       CancelNetworkRequest(NS_BINDING_ABORTED);
+       if (mTransactionPump && mSuspendCount) {
+         uint32_t suspendCount = mSuspendCount;
+         while (suspendCount--) {
+           mTransactionPump->Resume();
+         }
+       }
+@@ -6628,14 +6638,137 @@ nsHttpChannel::Resume() {
+ NS_IMETHODIMP
+ nsHttpChannel::GetSecurityInfo(nsITransportSecurityInfo** securityInfo) {
+   NS_ENSURE_ARG_POINTER(securityInfo);
+   *securityInfo = do_AddRef(mSecurityInfo).take();
+   return NS_OK;
+ }
+ 
++
++#include "nsIHttpHeaderVisitor.h" // Add this here
++
++class HeaderVisitor : public nsIHttpHeaderVisitor {
++public:
++  NS_DECL_ISUPPORTS
++  explicit HeaderVisitor(nsCString& aHeaders) : mHeaders(aHeaders) {}
++  NS_IMETHODIMP VisitHeader(const nsACString& aName, const nsACString& aValue) override {
++    mHeaders.Append(aName);
++    mHeaders.AppendLiteral(": ");
++    mHeaders.Append(aValue);
++    mHeaders.AppendLiteral("\r\n");
++    //TODO: processing headers here in this way is probably not right?! unclear.
++    return NS_OK;
++  }
++protected:
++  virtual ~HeaderVisitor() = default;
++private:
++  nsCString& mHeaders;
++};
++
++NS_IMPL_ISUPPORTS(HeaderVisitor, nsIHttpHeaderVisitor)
++
++nsCString nsHttpChannel::GetRawRequestHeaders() {
++  nsCString rawHeaders;
++  RefPtr<HeaderVisitor> visitor = new HeaderVisitor(rawHeaders);
++  nsresult rv = mRequestHead.VisitHeaders(visitor); // Direct, no filter
++  if (NS_FAILED(rv)) {
++    printf("Failed to visit all request headers: %08x\n", static_cast<unsigned>(rv));
++  }
++  return rawHeaders;
++}
++
++//called only from AsyncOpen
++nsresult nsHttpChannel::SetCustomDataInLoadInfo(CustomDataType aType) {
++  if (!mLoadInfo) {
++    printf("mLoadInfo is null, cannot store custom data\n");
++    return NS_ERROR_NULL_POINTER;
++  }
++
++  nsCString sourceValue;
++  const char* typeName = nullptr;
++  nsresult (nsILoadInfo::*setter)(const nsAString&) = nullptr;
++  nsresult (nsILoadInfo::*getter)(nsAString&) = nullptr;
++
++  if (aType == CustomDataType::PostData) {
++    sourceValue = mPostDataText;
++    typeName = "customPostDataText";
++    setter = &nsILoadInfo::SetCustomPostDataText;
++    getter = &nsILoadInfo::GetCustomPostDataText;
++  } else if (aType == CustomDataType::RequestHeaders) { // RequestHeaders
++    sourceValue = GetRawRequestHeaders();
++    typeName = "customRequestHeaders";
++    setter = &nsILoadInfo::SetCustomRequestHeaders;
++    getter = &nsILoadInfo::GetCustomRequestHeaders;
++  } else {
++    printf("!!!! Should not have happened, unless forgot to implement new type(s).\n");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  if (sourceValue.IsEmpty()) {
++    return NS_OK;
++  }
++
++  nsString value = NS_ConvertUTF8toUTF16(sourceValue);
++  nsresult rv = (mLoadInfo->*setter)(value);
++  if (NS_FAILED(rv)) {
++    printf("Set%s failed: %08x\n", typeName, static_cast<uint32_t>(rv));
++    return rv;
++  }
++
++  nsAutoString readBack;
++  rv = (mLoadInfo->*getter)(readBack);
++  if (NS_FAILED(rv)) {
++    printf("Get%s failed after set: %08x\n", typeName, static_cast<uint32_t>(rv));
++  }
++  return rv;
++}//method
++
++nsresult nsHttpChannel::ExtractStuffFromUploadStream() {
++  nsresult rv=NS_OK;
++  if (mUploadStream) {
++    nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mUploadStream);
++    nsAutoCString body; // Change to nsAutoCString for UTF-8
++
++    if (seekable) {
++      //this branch always happens, so far.
++      seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0);
++      rv = NS_ReadInputStreamToString(mUploadStream, body, -1);
++      if (NS_SUCCEEDED(rv)) {
++        mPostDataText = body;
++        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
++        rv=SetCustomDataInLoadInfo(CustomDataType::PostData);
++        NS_ENSURE_SUCCESS(rv, rv);
++        rv=SetCustomDataInLoadInfo(CustomDataType::RequestHeaders);
++        NS_ENSURE_SUCCESS(rv, rv);
++      } else {
++        printf("Failed to read seekable stream rv=%08x\n", static_cast<uint32_t>(rv));
++      }
++    } else {
++      // Try to clone the stream to avoid consuming it
++      nsCOMPtr<nsIInputStream> clonedStream;
++      rv = NS_CloneInputStream(mUploadStream, getter_AddRefs(clonedStream));
++      if (NS_SUCCEEDED(rv) && clonedStream) {
++        rv = NS_ReadInputStreamToString(clonedStream, body, -1); // -1 reads entire stream
++        if (NS_SUCCEEDED(rv)) {
++          mPostDataText = body; // Already nsCString
++          // TODO: remove:
++          printf("Captured cloned POST from .cpp so mPostDataText set to: %s\n", mPostDataText.get());
++          rv=SetCustomDataInLoadInfo(CustomDataType::PostData);
++          NS_ENSURE_SUCCESS(rv, rv);
++          rv=SetCustomDataInLoadInfo(CustomDataType::RequestHeaders);
++          NS_ENSURE_SUCCESS(rv, rv);
++        }
++      } else {
++        printf("!!! Non-seekable stream cloning failed, rv=%08x, so customPostDataText and customRequestHeaders weren't set via mLoadInfo at all.\n", static_cast<uint32_t>(rv));
++      }
++    }//else seekable
++  }//if
++  return rv;
++}//method
++
++
+ // If any of the functions that AsyncOpen calls returns immediately an error
+ // AsyncAbort(which calls onStart/onStopRequest) does not need to be call.
+ // To be sure that they are not call ReleaseListeners() is called.
+ // If AsyncOpen returns NS_OK, after that point AsyncAbort must be called on
+ // any error.
+ NS_IMETHODIMP
+ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+@@ -6667,23 +6800,41 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   AssertPrivateBrowsingId();
+ #endif
+ 
+   NS_ENSURE_ARG_POINTER(listener);
+   NS_ENSURE_TRUE(!LoadIsPending(), NS_ERROR_IN_PROGRESS);
+   NS_ENSURE_TRUE(!LoadWasOpened(), NS_ERROR_ALREADY_OPENED);
+ 
++  nsAutoCString uriSpec;
++  mURI->GetSpec(uriSpec);
++  mLoadInfo->SetOriginalRequestURI(NS_ConvertUTF8toUTF16(uriSpec));
++
++  if (mCanceled && mStatus == NS_BINDING_ABORTED) {
++    //TODO: don't have a test for this except by doing an F5 after loaded page: https://docs.x.ai/docs/overview
++    printf("!!!! Cancelled via NS_BINDING_ABORTED\n");
++    ExtractStuffFromUploadStream();
++    //TODO: remove:
++    printf("!!!!!!!!!!!! Aborted with payload: %s\n", (!mPostDataText.IsEmpty() ? mPostDataText.get() : "null or empty"));
++  }//if cancelled via aborted
++
+   if (mCanceled) {
++    //TODO: remove:
++    nsresult rv=mStatus;//some weird fail if trying to print mStatus directly, unless done this way.
++    printf("!!!! in nsHttpChannel::AsyncOpen after the aborted check... exiting due to mCancelled with [this=%p status=%08x]\n", this, static_cast<uint32_t>(rv));
+     ReleaseListeners();
+     return NS_FAILED(mStatus) ? mStatus : NS_ERROR_FAILURE;
+   }
+ 
+   if (MaybeWaitForUploadStreamNormalization(listener, nullptr)) {
+     return NS_OK;
+   }
+ 
++  // Add payload capture here
++  ExtractStuffFromUploadStream();
++
+   MOZ_ASSERT(NS_IsMainThread());
+ 
+   if (!gHttpHandler->Active()) {
+     LOG(("  after HTTP shutdown..."));
+     ReleaseListeners();
+     return NS_ERROR_NOT_AVAILABLE;
+   }
+@@ -6745,15 +6896,15 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+   // After we notify any observers (on-opening-request, loadGroup, etc) we
+   // must return NS_OK and return any errors asynchronously via
+   // OnStart/OnStopRequest.  Observers may add a reference to the channel
+   // and expect to get OnStopRequest so they know when to drop the reference,
+   // etc.
+ 
+   // notify "http-on-opening-request" observers, but not if this is a redirect
+-  if (!(mLoadFlags & LOAD_REPLACE)) {
++  if (!(mLoadFlags & LOAD_REPLACE)) {//XXX: uhm...
+     gHttpHandler->OnOpeningRequest(this);
+   }
+ 
+   StoreIsPending(true);
+   StoreWasOpened(true);
+ 
+   mListener = listener;
+@@ -6764,14 +6915,20 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
+     gIOService->CallOrWaitForSocketProcess(
+         [self]() { self->AsyncOpenFinal(TimeStamp::Now()); });
+     return NS_OK;
+   }
+ 
+   AsyncOpenFinal(TimeStamp::Now());
+ 
++  return NS_OK;
++} // end of AsyncOpen method
++
++NS_IMETHODIMP
++nsHttpChannel::GetPostDataText(nsAString& aPostDataText) {
++  aPostDataText = NS_ConvertUTF8toUTF16(mPostDataText);
+   return NS_OK;
+ }
+ 
+ void nsHttpChannel::AsyncOpenFinal(TimeStamp aTimeStamp) {
+   // We save this timestamp from outside of the if block in case we enable the
+   // profiler after AsyncOpen().
+   mLastStatusReported = TimeStamp::Now();
+diff --git a/netwerk/protocol/http/nsHttpChannel.h b/netwerk/protocol/http/nsHttpChannel.h
+index cb8b8b7406..e07fc9bd3c 100644
+--- a/netwerk/protocol/http/nsHttpChannel.h
++++ b/netwerk/protocol/http/nsHttpChannel.h
+@@ -98,14 +98,17 @@ class nsHttpChannel final : public HttpBaseChannel,
+   // others.
+   NS_IMETHOD GetIsSSL(bool* aIsSSL) override;
+   NS_IMETHOD GetProxyMethodIsConnect(bool* aProxyMethodIsConnect) override;
+   NS_IMETHOD GetServerResponseHeader(
+       nsACString& aServerResponseHeader) override;
+   NS_IMETHOD GetProxyChallenges(nsACString& aChallenges) override;
+   NS_IMETHOD GetWWWChallenges(nsACString& aChallenges) override;
++  
++  NS_IMETHOD GetPostDataText(nsAString& aPostDataText) override;
++
+   NS_IMETHOD SetProxyCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD SetWWWCredentials(const nsACString& aCredentials) override;
+   NS_IMETHOD OnAuthAvailable() override;
+   NS_IMETHOD OnAuthCancelled(bool userCancel) override;
+   NS_IMETHOD CloseStickyConnection() override;
+   NS_IMETHOD ConnectionRestartable(bool) override;
+   // Functions we implement from nsIHttpAuthenticableChannel but are
+@@ -845,14 +848,15 @@ class nsHttpChannel final : public HttpBaseChannel,
+ 
+   // If mHTTPSSVCRecord has value, it means OnHTTPSRRAvailable() is called and
+   // we got the result of HTTPS RR query. Otherwise, it means we are still
+   // waiting for the result or the query is not performed.
+   Maybe<nsCOMPtr<nsIDNSHTTPSSVCRecord>> mHTTPSSVCRecord;
+ 
+  protected:
++    nsCString mPostDataText; // ADDED: Store POST payload
+   virtual void DoNotifyListenerCleanup() override;
+ 
+   // Override ReleaseListeners() because mChannelClassifier only exists
+   // in nsHttpChannel and it will be released in ReleaseListeners().
+   virtual void ReleaseListeners() override;
+ 
+   virtual void DoAsyncAbort(nsresult aStatus) override;
+@@ -860,14 +864,20 @@ class nsHttpChannel final : public HttpBaseChannel,
+  private:  // cache telemetry
+   bool mDidReval{false};
+ 
+   RefPtr<nsIEarlyHintObserver> mEarlyHintObserver;
+   Maybe<nsCString> mOpenerCallingScriptLocation;
+   RefPtr<WebTransportSessionEventListener> mWebTransportSessionEventListener;
+   nsMainThreadPtrHandle<nsIReplacedHttpResponse> mOverrideResponse;
++
++  //mods
++  enum class CustomDataType { PostData, RequestHeaders };
++  nsresult SetCustomDataInLoadInfo(CustomDataType aType);
++  nsresult ExtractStuffFromUploadStream();
++  nsCString GetRawRequestHeaders();
+ };
+ 
+ NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpChannel, NS_HTTPCHANNEL_IID)
+ }  // namespace net
+ }  // namespace mozilla
+ 
+ inline nsISupports* ToSupports(mozilla::net::nsHttpChannel* aChannel) {
+diff --git a/netwerk/protocol/http/nsIHttpChannel.idl b/netwerk/protocol/http/nsIHttpChannel.idl
+index a8372ba080..d1440c118b 100644
+--- a/netwerk/protocol/http/nsIHttpChannel.idl
++++ b/netwerk/protocol/http/nsIHttpChannel.idl
+@@ -17,17 +17,18 @@ native UniqueProfileChunkedBuffer(mozilla::UniquePtr<mozilla::ProfileChunkedBuff
+ /**
+  * nsIHttpChannel
+  *
+  * This interface allows for the modification of HTTP request parameters and
+  * the inspection of the resulting HTTP response status and headers when they
+  * become available.
+  */
+-[builtinclass, scriptable, uuid(c5a4a073-4539-49c7-a3f2-cec3f0619c6c)]
++[builtinclass, scriptable, uuid(7d549585-2470-4534-9315-471a44be70dc)]
+ interface nsIHttpChannel : nsIIdentChannel
+ {
++  void getPostDataText(out AString aPostDataText);
+     /**************************************************************************
+      * REQUEST CONFIGURATION
+      *
+      * Modifying request parameters after asyncOpen has been called is an error.
+      */
+ 
+     /**
+diff --git a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+index d38cc43586..91ff7abe74 100644
+--- a/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
++++ b/netwerk/protocol/viewsource/nsViewSourceChannel.cpp
+@@ -15,14 +15,16 @@
+ #include "nsIIOService.h"
+ #include "nsIInputStreamChannel.h"
+ #include "nsIReferrerInfo.h"
+ #include "nsMimeTypes.h"
+ #include "nsNetUtil.h"
+ #include "nsServiceManagerUtils.h"
+ 
++#include "nsString.h"
++
+ NS_IMPL_ADDREF(nsViewSourceChannel)
+ NS_IMPL_RELEASE(nsViewSourceChannel)
+ /*
+   This QI uses NS_INTERFACE_MAP_ENTRY_CONDITIONAL to check for
+   non-nullness of mHttpChannel, mCachingChannel, and mUploadChannel.
+ */
+ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+@@ -41,14 +43,21 @@ NS_INTERFACE_MAP_BEGIN(nsViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIFormPOSTActionChannel, mPostChannel)
+   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIChildChannel, mChildChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsIRequest, nsIViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsIChannel, nsIViewSourceChannel)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIViewSourceChannel)
+ NS_INTERFACE_MAP_END
+ 
++NS_IMETHODIMP
++nsViewSourceChannel::GetPostDataText(nsAString& aPostDataText) {
++  //TODO: needed?
++  aPostDataText.Assign(NS_ConvertUTF8toUTF16(""));
++  return NS_OK;
++}
++
+ static nsresult WillUseExternalProtocolHandler(nsIIOService* aIOService,
+                                                const char* aScheme) {
+   nsCOMPtr<nsIProtocolHandler> handler;
+   nsresult rv =
+       aIOService->GetProtocolHandler(aScheme, getter_AddRefs(handler));
+   if (NS_FAILED(rv)) {
+     return rv;
+diff --git a/toolkit/components/protobuf/src/google/protobuf/io/zero_copy_stream_impl_lite.cc b/toolkit/components/protobuf/src/google/protobuf/io/zero_copy_stream_impl_lite.cc
+index b3dfd84c7f..f74e831fe6 100644
+--- a/toolkit/components/protobuf/src/google/protobuf/io/zero_copy_stream_impl_lite.cc
++++ b/toolkit/components/protobuf/src/google/protobuf/io/zero_copy_stream_impl_lite.cc
+@@ -361,15 +361,15 @@ bool CopyingOutputStreamAdaptor::WriteAliasedRaw(const void* data, int size) {
+     if (!Next(&out, &out_size)) {
+       return false;
+     }
+ 
+     if (size <= out_size) {
+       std::memcpy(out, data, size);
+       BackUp(out_size - size);
+-      return true;
++      break;
+     }
+ 
+     std::memcpy(out, data, out_size);
+     data = static_cast<const char*>(data) + out_size;
+     size -= out_size;
+   }
+   return true;
