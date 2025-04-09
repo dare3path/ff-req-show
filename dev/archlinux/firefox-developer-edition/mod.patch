@@ -1,8 +1,15 @@
 diff --git a/PKGBUILD b/PKGBUILD
-index de8530e..3dff7c2 100644
+index de8530e..d626d92 100644
 --- a/PKGBUILD
 +++ b/PKGBUILD
-@@ -178,11 +178,21 @@ build() {
+@@ -173,16 +173,28 @@ build() {
+   # Breaks compilation since https://bugzilla.mozilla.org/show_bug.cgi?id=1896066
+   CFLAGS="${CFLAGS/-fexceptions/}"
+   CXXFLAGS="${CXXFLAGS/-fexceptions/}"
++  CFLAGS="${CFLAGS} -Wabstract-final-class -Werror=abstract-final-class"
++  CXXFLAGS="${CXXFLAGS} -Wabstract-final-class -Werror=abstract-final-class"
+ 
+   # LTO needs more open files
    ulimit -n 4096
  
    # Do 3-tier PGO
