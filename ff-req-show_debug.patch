@@ -17,7 +17,7 @@ future updates should be happening here: https://github.com/dare3path/ff-req-sho
 
 new changes:
 * ensures the Request payload is shown as formatted for in-flight unfinished-yet requests, and not just(like before) after they're finished/completed. FIXME: changes here may be overkill, besides I'm not really understanding what's happening here (grok3-suggested changes)
-* if request is binary, clicking on another tab like Headers or Cookies then back to Request then turning on Raw button will show it as formatted via the "This is your modded firefox..." from the code.
+* unintended feature: if request is binary, clicking on another tab like Headers or Cookies then back to Request then turning on Raw button will show it as formatted via the "This is your modded firefox..." from the code below.
 
 diff --git a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
 index dede5f8822..8c8b04b12b 100644
