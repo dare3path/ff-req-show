@@ -3,7 +3,6 @@ more specifically, on top of this source:
 https://archive.mozilla.org/pub/firefox/releases/137.0b10/source/firefox-137.0b10.source.tar.xz
 though on top of that it was also applied the Arch Linux patch 0001-Install-under-remoting-name.patch but it doesn't seem to affect this patch's application.
 
-TODO: a bunch of names that have 'custom' or 'Custom' should be renamed to 'original' or 'Original', else they're confusing.
 
 FIXME: original(custom)headers are being processed thus assumed to be a certain format which may miss headers. But after request completed, iirc, headers gets updated from a source that didn't do this processing (check if so).
 
@@ -15,6 +14,7 @@ new changes:
 * unintended feature: if request is binary, clicking on another tab like Headers or Cookies then back to Request then turning on Raw button will show it as formatted via the "This is your modded firefox..." from the code below.
 * superficilly tested to still work
 * (unrelated) removed two icu and protobuf unreachable code warnings
+* renamed stuff from custom*(and original*) to originell*, this has the effect of removing confusion and wonderings about whether some names already existed in ff original code at the time of assigning them.
 
 diff --git a/devtools/client/netmonitor/src/components/request-details/RequestPanel.js b/devtools/client/netmonitor/src/components/request-details/RequestPanel.js
 index dede5f8822..8c8b04b12b 100644
@@ -408,8 +408,8 @@ index 9e5a16ba46..3296d0446f 100644
 +        if (this._channel?.loadInfo) {
 +          const loadInfo = channel.loadInfo;
 +          try {
-+            if ("customPostDataText" in this._channel.loadInfo) {
-+              const postData = channel.loadInfo.customPostDataText;
++            if ("originellPostDataText" in this._channel.loadInfo) {
++              const postData = channel.loadInfo.originellPostDataText;
 +              // MODIFIED: Hack for nsIDataChannel if empty
 +              try {
 +                const li = loadInfo.QueryInterface(Ci.nsILoadInfo);
@@ -472,9 +472,9 @@ index 9e5a16ba46..3296d0446f 100644
 -
 +      // CHANGED: Probe loadInfo for headers
 +      if (channel?.loadInfo) {
-+        this._originalURI = channel.loadInfo?.originalRequestURI || channel.URI?.spec || "Failed: channel.URI?.spec was falsy for data or file channel.";
-+        if (channel?.loadInfo?.customRequestHeaders) {
-+          const rawHeaders = channel.loadInfo.customRequestHeaders;
++        this._originellURI = channel.loadInfo?.originellRequestURI || channel.URI?.spec || "Failed: channel.URI?.spec was falsy for data or file channel.";
++        if (channel?.loadInfo?.originellRequestHeaders) {
++          const rawHeaders = channel.loadInfo.originellRequestHeaders;
 +          requestHeaders = rawHeaders
 +            .split("\r\n")
 +            .filter(line => line.length)
@@ -484,7 +484,7 @@ index 9e5a16ba46..3296d0446f 100644
 +            });
 +        } else {
 +          requestHeaders = [
-+            { name: "X-Dummy-Header", value: "falsy channel?.loadInfo?.customRequestHeaders" },
++            { name: "X-Dummy-Header", value: "falsy channel?.loadInfo?.originellRequestHeaders" },
 +            { name: "Content-Type", value: "text/plain" }
 +          ];
 +        }
@@ -503,7 +503,7 @@ index 9e5a16ba46..3296d0446f 100644
        return;
 +    } else {
 +      // XXX: no need to set it for normal requests, it's seen properly in _createResource below due to that fallback!
-+      this._originalURI = channel?.URI?.spec || undefined;
++      this._originellURI = channel?.URI?.spec || undefined;
 +      // FIXME: this is a differently-caused error: JavaScript error: resource://devtools/client/netmonitor/src/connector/firefox-data-provider.js, line 733: TypeError: can't access property "replace", actor is undefined
 +    }
 +
@@ -572,8 +572,8 @@ index 9e5a16ba46..3296d0446f 100644
 -    const url = wsChannel ? wsChannel.URI.spec : channel.URI.spec;
 +    // XXX: to avoid this:
 +    //  JavaScript error: resource://devtools/client/netmonitor/src/utils/request-utils.js, line 248: TypeError: can't access property "href", urlObject is null
-+    //  must set this fallback in case for some reason this._originalURI is undefined:
-+    const url = wsChannel ? wsChannel.URI.spec : (this._originalURI || channel.URI.spec);
++    //  must set this fallback in case for some reason this._originellURI is undefined:
++    const url = wsChannel ? wsChannel.URI.spec : (this._originellURI || channel.URI.spec);
  
      let browsingContextID =
        lazy.NetworkUtils.getChannelBrowsingContextID(channel);
@@ -590,7 +590,7 @@ index 9e5a16ba46..3296d0446f 100644
      }
  
 +    // Double-check payload here too
-+    const postDataText = this._postDataText || channel?.loadInfo?.customPostDataText || null; //doesnt
++    const postDataText = this._postDataText || channel?.loadInfo?.originellPostDataText || null; //doesnt
 +    const postData = postDataText
 +      ? { text: postDataText, size: postDataText.length }
 +      : {};
@@ -659,7 +659,7 @@ index 9e5a16ba46..3296d0446f 100644
 +//  getRequestPostData() {
 +//    dump("getRequestPostData(in .js) called, channel=" + this._channel +
 +//       ", loadInfo=" + (this._channel?.loadInfo || "null") +
-+//       ", this._channel?.loadInfo?.customPostDataText=" + (this._channel?.loadInfo?.customPostDataText || "null") +
++//       ", this._channel?.loadInfo?.originellPostDataText=" + (this._channel?.loadInfo?.originellPostDataText || "null") +
 +//      ", this._postDataText=" + this._postDataText +
 +//      " and is of type: "+ typeof this._postDataText
 +//      +"\n");
@@ -698,9 +698,9 @@ index 9e5a16ba46..3296d0446f 100644
 +//      dump("Live channel getPostDataText failed: " + e + ", falling back to loadInfo.\n");
 +//    }
 +//    // Fallback to loadInfo
-+//    if (this._channel.loadInfo && "customPostDataText" in this._channel.loadInfo) {
-+//      let loadInfoText = this._channel.loadInfo.customPostDataText;
-+//      dump("Falling back to loadInfo.customPostDataText: " + (loadInfoText || "null") + "\n");
++//    if (this._channel.loadInfo && "originellPostDataText" in this._channel.loadInfo) {
++//      let loadInfoText = this._channel.loadInfo.originellPostDataText;
++//      dump("Falling back to loadInfo.originellPostDataText: " + (loadInfoText || "null") + "\n");
 +//      if (loadInfoText) {
 +//        postDataText = this._createLongStringActor(loadInfoText);
 +//        return { postData: { text: postDataText, size: loadInfoText.length }, postDataDiscarded: false };
@@ -723,7 +723,7 @@ index 9e5a16ba46..3296d0446f 100644
 -        text: postDataText,
 -      },
 -      postDataDiscarded: this._discardRequestBody,
-+    let postDataText = this._postDataText || this._channel?.loadInfo?.customPostDataText || null;
++    let postDataText = this._postDataText || this._channel?.loadInfo?.originellPostDataText || null;
 +    const postData = postDataText
 +      ? { text: this._createLongStringActor(postDataText), size: postDataText.length }
 +      : { size: 0, text: "" /*null here would break original ff code in "JavaScript error: resource://devtools/client/shared/string-utils.js, line 19: TypeError: can't access property "type", stringGrip is null
@@ -848,12 +848,12 @@ index 0f3f2976e2..61f42c0924 100644
    }
  
 +  // Add our field(s)
-+  nsAutoString customPostDataText;
-+  aLoadInfo->GetCustomPostDataText(customPostDataText);
-+  nsAutoString customRequestHeaders;
-+  aLoadInfo->GetCustomRequestHeaders(customRequestHeaders);
-+  nsAutoString originalRequestURI;
-+  aLoadInfo->GetOriginalRequestURI(originalRequestURI);
++  nsAutoString originellPostDataText;
++  aLoadInfo->GetOriginellPostDataText(originellPostDataText);
++  nsAutoString originellRequestHeaders;
++  aLoadInfo->GetOriginellRequestHeaders(originellRequestHeaders);
++  nsAutoString originellRequestURI;
++  aLoadInfo->GetOriginellRequestURI(originellRequestURI);
 +
 +
    *outLoadInfoArgs = LoadInfoArgs(
@@ -874,9 +874,9 @@ index 0f3f2976e2..61f42c0924 100644
 -      aLoadInfo->GetUserNavigationInvolvement());
 +      aLoadInfo->GetUserNavigationInvolvement(),
 +      // Add our field at the end (position matches NeckoChannelParams.ipdlh)
-+      customPostDataText,
-+      customRequestHeaders,
-+      originalRequestURI
++      originellPostDataText,
++      originellRequestHeaders,
++      originellRequestURI
 +      );
  
    return NS_OK;
@@ -896,11 +896,11 @@ index 0f3f2976e2..61f42c0924 100644
 +  //We didn't add these to the constructor args list in LoadInfo because why
 +  //would we.
 +  // Add our field after construction
-+  nsresult rv = loadInfo->SetCustomPostDataText(loadInfoArgs.customPostDataText());
++  nsresult rv = loadInfo->SetOriginellPostDataText(loadInfoArgs.originellPostDataText());
 +  NS_ENSURE_SUCCESS(rv, rv);
-+  rv = loadInfo->SetCustomRequestHeaders(loadInfoArgs.customRequestHeaders());
++  rv = loadInfo->SetOriginellRequestHeaders(loadInfoArgs.originellRequestHeaders());
 +  NS_ENSURE_SUCCESS(rv, rv);
-+  rv = loadInfo->SetOriginalRequestURI(loadInfoArgs.originalRequestURI());
++  rv = loadInfo->SetOriginellRequestURI(loadInfoArgs.originellRequestURI());
 +  NS_ENSURE_SUCCESS(rv, rv);
 +
 +
@@ -919,17 +919,17 @@ index 0f3f2976e2..61f42c0924 100644
          Some(overriddenFingerprintingSettings.ref());
    }
  
-+  nsAutoString customPostData;
-+  aLoadInfo->GetCustomPostDataText(customPostData);
-+  nsCString customPostDataUTF8 = NS_ConvertUTF16toUTF8(customPostData);
++  nsAutoString originellPostData;
++  aLoadInfo->GetOriginellPostDataText(originellPostData);
++  nsCString originellPostDataUTF8 = NS_ConvertUTF16toUTF8(originellPostData);
 +
-+  nsAutoString customRH;
-+  aLoadInfo->GetCustomRequestHeaders(customRH);
-+  nsCString customRHUTF8 = NS_ConvertUTF16toUTF8(customRH);
++  nsAutoString originellRH;
++  aLoadInfo->GetOriginellRequestHeaders(originellRH);
++  nsCString originellRHUTF8 = NS_ConvertUTF16toUTF8(originellRH);
 +
-+  nsAutoString originalRURI;
-+  aLoadInfo->GetOriginalRequestURI(originalRURI);
-+  nsCString originalRURIUTF8 = NS_ConvertUTF16toUTF8(originalRURI);
++  nsAutoString originellRURI;
++  aLoadInfo->GetOriginellRequestURI(originellRURI);
++  nsCString originellRURIUTF8 = NS_ConvertUTF16toUTF8(originellRURI);
 +
    *aForwarderArgsOut = ParentLoadInfoForwarderArgs(
        aLoadInfo->GetAllowInsecureRedirectToDataURI(), ipcController, tainting,
@@ -948,9 +948,9 @@ index 0f3f2976e2..61f42c0924 100644
        aLoadInfo->GetIsOn3PCBExceptionList(), unstrippedURI,
 -      aLoadInfo->GetUserNavigationInvolvement());
 +      aLoadInfo->GetUserNavigationInvolvement(),
-+      !customPostDataUTF8.IsEmpty() ? mozilla::Some(customPostDataUTF8) : mozilla::Nothing()
-+      ,!customRHUTF8.IsEmpty() ? mozilla::Some(customRHUTF8) : mozilla::Nothing()
-+      ,!originalRURIUTF8.IsEmpty() ? mozilla::Some(originalRURIUTF8) : mozilla::Nothing()
++      !originellPostDataUTF8.IsEmpty() ? mozilla::Some(originellPostDataUTF8) : mozilla::Nothing()
++      ,!originellRHUTF8.IsEmpty() ? mozilla::Some(originellRHUTF8) : mozilla::Nothing()
++      ,!originellRURIUTF8.IsEmpty() ? mozilla::Some(originellRURIUTF8) : mozilla::Nothing()
 +        );
  }
  
@@ -967,19 +967,19 @@ index 0f3f2976e2..61f42c0924 100644
    aLoadInfo->SetUserNavigationInvolvement(
        uint8_t(aForwarderArgs.userNavigationInvolvement()));
  
-+  if (aForwarderArgs.customPostDataText().isSome()) {
-+    rv = aLoadInfo->SetCustomPostDataText(
-+        NS_ConvertUTF8toUTF16(aForwarderArgs.customPostDataText().ref()));
++  if (aForwarderArgs.originellPostDataText().isSome()) {
++    rv = aLoadInfo->SetOriginellPostDataText(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.originellPostDataText().ref()));
 +    NS_ENSURE_SUCCESS(rv, rv);
 +  }
-+  if (aForwarderArgs.customRequestHeaders().isSome()) {
-+    rv = aLoadInfo->SetCustomRequestHeaders(
-+        NS_ConvertUTF8toUTF16(aForwarderArgs.customRequestHeaders().ref()));
++  if (aForwarderArgs.originellRequestHeaders().isSome()) {
++    rv = aLoadInfo->SetOriginellRequestHeaders(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.originellRequestHeaders().ref()));
 +    NS_ENSURE_SUCCESS(rv, rv);
 +  }
-+  if (aForwarderArgs.originalRequestURI().isSome()) {
-+    rv = aLoadInfo->SetOriginalRequestURI(
-+        NS_ConvertUTF8toUTF16(aForwarderArgs.originalRequestURI().ref()));
++  if (aForwarderArgs.originellRequestURI().isSome()) {
++    rv = aLoadInfo->SetOriginellRequestURI(
++        NS_ConvertUTF8toUTF16(aForwarderArgs.originellRequestURI().ref()));
 +    NS_ENSURE_SUCCESS(rv, rv);
 +  }
 +
@@ -1003,34 +1003,34 @@ index 1ec2c64193..99a2d75019 100644
  }
  
 +NS_IMETHODIMP
-+LoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
-+  aCustomPostDataText = mCustomPostDataText; // New: Return our string
++LoadInfo::GetOriginellPostDataText(nsAString& aOriginellPostDataText) {
++  aOriginellPostDataText = mOriginellPostDataText; // New: Return our string
 +  return NS_OK;
 +}
 +
 +NS_IMETHODIMP
-+LoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
-+  mCustomPostDataText = aCustomPostDataText; // New: Set our string
++LoadInfo::SetOriginellPostDataText(const nsAString& aOriginellPostDataText) {
++  mOriginellPostDataText = aOriginellPostDataText; // New: Set our string
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP LoadInfo::SetCustomRequestHeaders(const nsAString& aHeaders) {
-+  mCustomRequestHeaders = aHeaders;
++NS_IMETHODIMP LoadInfo::SetOriginellRequestHeaders(const nsAString& aHeaders) {
++  mOriginellRequestHeaders = aHeaders;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP LoadInfo::GetCustomRequestHeaders(nsAString& aHeaders) {
-+  aHeaders = mCustomRequestHeaders;
++NS_IMETHODIMP LoadInfo::GetOriginellRequestHeaders(nsAString& aHeaders) {
++  aHeaders = mOriginellRequestHeaders;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP LoadInfo::SetOriginalRequestURI(const nsAString& aOrigRURI) {
-+  mOriginalRequestURI = aOrigRURI;
++NS_IMETHODIMP LoadInfo::SetOriginellRequestURI(const nsAString& aOrigRURI) {
++  mOriginellRequestURI = aOrigRURI;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP LoadInfo::GetOriginalRequestURI(nsAString& aOrigRURI) {
-+  aOrigRURI = mOriginalRequestURI;
++NS_IMETHODIMP LoadInfo::GetOriginellRequestURI(nsAString& aOrigRURI) {
++  aOrigRURI = mOriginellRequestURI;
 +  return NS_OK;
 +}
 +
@@ -1052,9 +1052,9 @@ index 1ec2c64193..99a2d75019 100644
 -      mInternalContentPolicyType(aContentPolicyType) {
 +      mInternalContentPolicyType(aContentPolicyType),
 +      // Changed: Explicitly init to empty
-+      mCustomPostDataText(),
-+      mCustomRequestHeaders(),
-+      mOriginalRequestURI()
++      mOriginellPostDataText(),
++      mOriginellRequestHeaders(),
++      mOriginellRequestURI()
 +{
    MOZ_ASSERT(mLoadingPrincipal);
    MOZ_ASSERT(mTriggeringPrincipal);
@@ -1074,9 +1074,9 @@ index 1ec2c64193..99a2d75019 100644
 -      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT) {
 +      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT),
 +      // Changed: Explicitly init to empty
-+      mCustomPostDataText(),
-+      mCustomRequestHeaders(),
-+      mOriginalRequestURI()
++      mOriginellPostDataText(),
++      mOriginellRequestHeaders(),
++      mOriginellRequestURI()
 +{
    // Top-level loads are never third-party
    // Grab the information we can out of the window.
@@ -1096,9 +1096,9 @@ index 1ec2c64193..99a2d75019 100644
 -      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT) {
 +      mInternalContentPolicyType(nsIContentPolicy::TYPE_DOCUMENT),
 +      // Changed: Explicitly init to empty
-+      mCustomPostDataText(),
-+      mCustomRequestHeaders(),
-+      mOriginalRequestURI()
++      mOriginellPostDataText(),
++      mOriginellRequestHeaders(),
++      mOriginellRequestURI()
 +{
    // Top-level loads are never third-party
    // Grab the information we can out of the window.
@@ -1118,9 +1118,9 @@ index 1ec2c64193..99a2d75019 100644
 -      mInternalContentPolicyType(aContentPolicyType) {
 +      mInternalContentPolicyType(aContentPolicyType),
 +      // Changed: Explicitly init to empty
-+      mCustomPostDataText(),
-+      mCustomRequestHeaders(),
-+      mOriginalRequestURI()
++      mOriginellPostDataText(),
++      mOriginellRequestHeaders(),
++      mOriginellRequestURI()
 +{
    CanonicalBrowsingContext* parentBC = aParentWGP->BrowsingContext();
    MOZ_ASSERT(parentBC);
@@ -1140,9 +1140,9 @@ index 1ec2c64193..99a2d75019 100644
 -      mIsNewWindowTarget(rhs.mIsNewWindowTarget) {
 +      mIsNewWindowTarget(rhs.mIsNewWindowTarget),
 +      // Changed: Add our field
-+      mCustomPostDataText(rhs.mCustomPostDataText),
-+      mCustomRequestHeaders(rhs.mCustomRequestHeaders),
-+      mOriginalRequestURI(rhs.mOriginalRequestURI)
++      mOriginellPostDataText(rhs.mOriginellPostDataText),
++      mOriginellRequestHeaders(rhs.mOriginellRequestHeaders),
++      mOriginellRequestURI(rhs.mOriginellRequestURI)
 +{
  }
  
@@ -1162,9 +1162,9 @@ index 1ec2c64193..99a2d75019 100644
 -      mIsNewWindowTarget(aIsNewWindowTarget) {
 +      mIsNewWindowTarget(aIsNewWindowTarget),
 +      // Changed: Explicitly init to empty
-+      mCustomPostDataText(),
-+      mCustomRequestHeaders(),
-+      mOriginalRequestURI()
++      mOriginellPostDataText(),
++      mOriginellRequestHeaders(),
++      mOriginellRequestURI()
 +{
    // Only top level TYPE_DOCUMENT loads can have a null loadingPrincipal
    MOZ_ASSERT(mLoadingPrincipal ||
@@ -1186,9 +1186,9 @@ index 93cc8d3630..52e8cfc716 100644
    bool mIsNewWindowTarget = false;
    bool mSkipHTTPSUpgrade = false;
 +
-+  nsString mCustomPostDataText; // Add this
-+  nsString mCustomRequestHeaders; // Add this
-+  nsString mOriginalRequestURI; // Add this
++  nsString mOriginellPostDataText; // Add this
++  nsString mOriginellRequestHeaders; // Add this
++  nsString mOriginellRequestURI; // Add this
  };
  
  // This is exposed solely for testing purposes and should not be used outside of
@@ -1227,9 +1227,9 @@ index d1650595f8..17730623e1 100644
 -      mInternalContentPolicyType(aContentPolicyType) {}
 +      mInternalContentPolicyType(aContentPolicyType),
 +      // Changed: Explicitly init to empty
-+      mCustomPostDataText(),
-+      mCustomRequestHeaders(),
-+      mOriginalRequestURI()
++      mOriginellPostDataText(),
++      mOriginellRequestHeaders(),
++      mOriginellRequestURI()
 +  {
 +  }
  
@@ -1237,30 +1237,30 @@ index d1650595f8..17730623e1 100644
    nsCOMPtr<nsILoadInfo> loadInfo =
        new TRRLoadInfo(mResultPrincipalURI, mInternalContentPolicyType);
  
-+  // Changed: Copy customPostDataText
-+  nsAutoString customPostData;
++  // Changed: Copy originellPostDataText
++  nsAutoString originellPostData;
 +  // Use const_cast to call non-const getter—safe here (read-only)
-+  const_cast<TRRLoadInfo*>(this)->GetCustomPostDataText(customPostData);
-+  if (!customPostData.IsEmpty()) {
-+    loadInfo->SetCustomPostDataText(customPostData);
++  const_cast<TRRLoadInfo*>(this)->GetOriginellPostDataText(originellPostData);
++  if (!originellPostData.IsEmpty()) {
++    loadInfo->SetOriginellPostDataText(originellPostData);
 +  } else {
-+    printf("TRRLoadInfo::Clone() no customPostDataText to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
++    printf("TRRLoadInfo::Clone() no originellPostDataText to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
 +  }
-+  nsAutoString customRH;
++  nsAutoString originellRH;
 +  // Use const_cast to call non-const getter—safe here (read-only)
-+  const_cast<TRRLoadInfo*>(this)->GetCustomRequestHeaders(customRH);
-+  if (!customRH.IsEmpty()) {
-+    loadInfo->SetCustomRequestHeaders(customRH);
++  const_cast<TRRLoadInfo*>(this)->GetOriginellRequestHeaders(originellRH);
++  if (!originellRH.IsEmpty()) {
++    loadInfo->SetOriginellRequestHeaders(originellRH);
 +  } else {
-+    printf("TRRLoadInfo::Clone() no customRequestHeaders to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
++    printf("TRRLoadInfo::Clone() no originellRequestHeaders to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
 +  }
-+  nsAutoString originalRURI;
++  nsAutoString originellRURI;
 +  // Use const_cast to call non-const getter—safe here (read-only)
-+  const_cast<TRRLoadInfo*>(this)->GetOriginalRequestURI(originalRURI);
-+  if (!originalRURI.IsEmpty()) {
-+    loadInfo->SetOriginalRequestURI(originalRURI);
++  const_cast<TRRLoadInfo*>(this)->GetOriginellRequestURI(originellRURI);
++  if (!originellRURI.IsEmpty()) {
++    loadInfo->SetOriginellRequestURI(originellRURI);
 +  } else {
-+    printf("TRRLoadInfo::Clone() no originalRequestURI to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
++    printf("TRRLoadInfo::Clone() no originellRequestURI to copy (ie. it's empty)\n");//FIXME: so we don't clone it if empty? does it then get to be auto-empty due to constructed as such? (seems so if I superficially think about it now)
 +  }
 +
    return loadInfo.forget();
@@ -1279,34 +1279,34 @@ index d1650595f8..17730623e1 100644
  }
  
 +NS_IMETHODIMP
-+TRRLoadInfo::GetCustomPostDataText(nsAString& aCustomPostDataText) {
-+  aCustomPostDataText = mCustomPostDataText;
++TRRLoadInfo::GetOriginellPostDataText(nsAString& aOriginellPostDataText) {
++  aOriginellPostDataText = mOriginellPostDataText;
 +  return NS_OK;
 +}
 +
 +NS_IMETHODIMP
-+TRRLoadInfo::SetCustomPostDataText(const nsAString& aCustomPostDataText) {
-+  mCustomPostDataText = aCustomPostDataText;
++TRRLoadInfo::SetOriginellPostDataText(const nsAString& aOriginellPostDataText) {
++  mOriginellPostDataText = aOriginellPostDataText;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP TRRLoadInfo::SetCustomRequestHeaders(const nsAString& aHeaders) {
-+  mCustomRequestHeaders = aHeaders;
++NS_IMETHODIMP TRRLoadInfo::SetOriginellRequestHeaders(const nsAString& aHeaders) {
++  mOriginellRequestHeaders = aHeaders;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP TRRLoadInfo::GetCustomRequestHeaders(nsAString& aHeaders) {
-+  aHeaders = mCustomRequestHeaders;
++NS_IMETHODIMP TRRLoadInfo::GetOriginellRequestHeaders(nsAString& aHeaders) {
++  aHeaders = mOriginellRequestHeaders;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP TRRLoadInfo::SetOriginalRequestURI(const nsAString& aOrigRURI) {
-+  mOriginalRequestURI = aOrigRURI;
++NS_IMETHODIMP TRRLoadInfo::SetOriginellRequestURI(const nsAString& aOrigRURI) {
++  mOriginellRequestURI = aOrigRURI;
 +  return NS_OK;
 +}
 +
-+NS_IMETHODIMP TRRLoadInfo::GetOriginalRequestURI(nsAString& aOrigRURI) {
-+  aOrigRURI = mOriginalRequestURI;
++NS_IMETHODIMP TRRLoadInfo::GetOriginellRequestURI(nsAString& aOrigRURI) {
++  aOrigRURI = mOriginellRequestURI;
 +  return NS_OK;
 +}
 +
@@ -1326,9 +1326,9 @@ index 25f588c96f..5fb944e44d 100644
    Maybe<RFPTargetSet> mOverriddenFingerprintingSettings;
 +
 +  // Changed: Add our own field(s)
-+  nsString mCustomPostDataText;
-+  nsString mCustomRequestHeaders;
-+  nsString mOriginalRequestURI;
++  nsString mOriginellPostDataText;
++  nsString mOriginellRequestHeaders;
++  nsString mOriginellRequestURI;
  };
  
  }  // namespace net
@@ -1348,7 +1348,7 @@ index 774ec045c0..ff64c617e2 100644
   * redirect, see documentation on individual properties.
   */
 -[scriptable, builtinclass, uuid(ddc65bf9-2f60-41ab-b22a-4f1ae9efcd36)]
-+[scriptable, builtinclass, uuid(a3361830-8a97-44d6-9b6b-64900e4d201c)]
++[scriptable, builtinclass, uuid(54d0e779-dde6-4ebe-9d7e-157ed194fc53)]
  interface nsILoadInfo : nsISupports
  {
    /**
@@ -1381,9 +1381,9 @@ index 774ec045c0..ff64c617e2 100644
      }
  %}
 +
-+  attribute AString customPostDataText;
-+  attribute AString customRequestHeaders;
-+  attribute AString originalRequestURI;
++  attribute AString originellPostDataText;
++  attribute AString originellRequestHeaders;
++  attribute AString originellRequestURI;
  };
 diff --git a/netwerk/ipc/NeckoChannelParams.ipdlh b/netwerk/ipc/NeckoChannelParams.ipdlh
 index 0924673e59..ca6a014e44 100644
@@ -1398,9 +1398,9 @@ index 0924673e59..ca6a014e44 100644
    bool                        isNewWindowTarget;
    UserNavigationInvolvement   userNavigationInvolvement;
 +  // MODIFIED: Add our field(s)
-+  nsString customPostDataText;
-+  nsString customRequestHeaders;
-+  nsString originalRequestURI;
++  nsString originellPostDataText;
++  nsString originellRequestHeaders;
++  nsString originellRequestURI;
 +  // END MODIFIED
  };
  
@@ -1417,9 +1417,9 @@ index 0924673e59..ca6a014e44 100644
  
    UserNavigationInvolvement userNavigationInvolvement;
  
-+  nsCString? customPostDataText;  // Added this.
-+  nsCString? customRequestHeaders;  // Added this.
-+  nsCString? originalRequestURI;  // Added this.
++  nsCString? originellPostDataText;  // Added this.
++  nsCString? originellRequestHeaders;  // Added this.
++  nsCString? originellRequestURI;  // Added this.
 +
    // IMPORTANT: when you add new properites here you must also update
    // LoadInfoToParentLoadInfoForwarder and MergeParentLoadInfoForwarder
@@ -1570,13 +1570,13 @@ index 5a38d5a035..478b6491ab 100644
 +    nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
 +    nsAutoString postData;
 +    nsAutoString requestHeaders;
-+    nsAutoString originalRequestURI;
-+    mLoadInfo->GetCustomPostDataText(postData);
-+    mLoadInfo->GetCustomRequestHeaders(requestHeaders);
-+    mLoadInfo->GetOriginalRequestURI(originalRequestURI);
-+    redirectLoadInfo->SetCustomPostDataText(postData);
-+    redirectLoadInfo->SetCustomRequestHeaders(requestHeaders);
-+    redirectLoadInfo->SetOriginalRequestURI(originalRequestURI);
++    nsAutoString originellRequestURI;
++    mLoadInfo->GetOriginellPostDataText(postData);
++    mLoadInfo->GetOriginellRequestHeaders(requestHeaders);
++    mLoadInfo->GetOriginellRequestURI(originellRequestURI);
++    redirectLoadInfo->SetOriginellPostDataText(postData);
++    redirectLoadInfo->SetOriginellRequestHeaders(requestHeaders);
++    redirectLoadInfo->SetOriginellRequestURI(originellRequestURI);
 +  } else {
 +    //XXX: triggers but unclear when.
 +    printf("no mRedirectChannelChild in HttpChannelChild::ConnectParent [this=%p, id=%" PRIu32 "]\n", this, registrarId);
@@ -1602,14 +1602,14 @@ index 5a38d5a035..478b6491ab 100644
 +      nsCOMPtr<nsIIdentChannel> redirectIdent = do_QueryInterface(mRedirectChannelChild);
 +      nsCOMPtr<nsILoadInfo> redirectLoadInfo = redirectChan->LoadInfo();
 +      nsAutoString postData;
-+      mLoadInfo->GetCustomPostDataText(postData);
-+      redirectLoadInfo->SetCustomPostDataText(postData);
++      mLoadInfo->GetOriginellPostDataText(postData);
++      redirectLoadInfo->SetOriginellPostDataText(postData);
 +      nsAutoString requestHeaders;
-+      mLoadInfo->GetCustomRequestHeaders(requestHeaders);
-+      redirectLoadInfo->SetCustomRequestHeaders(requestHeaders);
-+      nsAutoString originalRequestURI;
-+      mLoadInfo->GetOriginalRequestURI(originalRequestURI);
-+      redirectLoadInfo->SetOriginalRequestURI(originalRequestURI);
++      mLoadInfo->GetOriginellRequestHeaders(requestHeaders);
++      redirectLoadInfo->SetOriginellRequestHeaders(requestHeaders);
++      nsAutoString originellRequestURI;
++      mLoadInfo->GetOriginellRequestURI(originellRequestURI);
++      redirectLoadInfo->SetOriginellRequestURI(originellRequestURI);
 +      uint64_t redirectId = 0;
 +      if (redirectIdent) {
 +        nsresult rv = redirectIdent->GetChannelId(&redirectId);
@@ -2051,9 +2051,9 @@ index e4479400a4..53f151c27e 100644
 +}
 +
 +//called only from AsyncOpen
-+nsresult nsHttpChannel::SetCustomDataInLoadInfo(CustomDataType aType) {
++nsresult nsHttpChannel::SetOriginellDataInLoadInfo(OriginellDataType aType) {
 +  if (!mLoadInfo) {
-+    printf("mLoadInfo is null, cannot store custom data\n");
++    printf("mLoadInfo is null, cannot store originell data\n");
 +    return NS_ERROR_NULL_POINTER;
 +  }
 +
@@ -2062,16 +2062,16 @@ index e4479400a4..53f151c27e 100644
 +  nsresult (nsILoadInfo::*setter)(const nsAString&) = nullptr;
 +  nsresult (nsILoadInfo::*getter)(nsAString&) = nullptr;
 +
-+  if (aType == CustomDataType::PostData) {
++  if (aType == OriginellDataType::PostData) {
 +    sourceValue = mPostDataText;
-+    typeName = "customPostDataText";
-+    setter = &nsILoadInfo::SetCustomPostDataText;
-+    getter = &nsILoadInfo::GetCustomPostDataText;
-+  } else if (aType == CustomDataType::RequestHeaders) { // RequestHeaders
++    typeName = "originellPostDataText";
++    setter = &nsILoadInfo::SetOriginellPostDataText;
++    getter = &nsILoadInfo::GetOriginellPostDataText;
++  } else if (aType == OriginellDataType::RequestHeaders) { // RequestHeaders
 +    sourceValue = GetRawRequestHeaders();
-+    typeName = "customRequestHeaders";
-+    setter = &nsILoadInfo::SetCustomRequestHeaders;
-+    getter = &nsILoadInfo::GetCustomRequestHeaders;
++    typeName = "originellRequestHeaders";
++    setter = &nsILoadInfo::SetOriginellRequestHeaders;
++    getter = &nsILoadInfo::GetOriginellRequestHeaders;
 +  } else {
 +    printf("!!!! Should not have happened, unless forgot to implement new type(s).\n");
 +    return NS_ERROR_INVALID_ARG;
@@ -2109,9 +2109,9 @@ index e4479400a4..53f151c27e 100644
 +      if (NS_SUCCEEDED(rv)) {
 +        mPostDataText = body;
 +        seekable->Seek(nsISeekableStream::NS_SEEK_SET, 0); // Reset stream
-+        rv=SetCustomDataInLoadInfo(CustomDataType::PostData);
++        rv=SetOriginellDataInLoadInfo(OriginellDataType::PostData);
 +        NS_ENSURE_SUCCESS(rv, rv);
-+        rv=SetCustomDataInLoadInfo(CustomDataType::RequestHeaders);
++        rv=SetOriginellDataInLoadInfo(OriginellDataType::RequestHeaders);
 +        NS_ENSURE_SUCCESS(rv, rv);
 +      } else {
 +        printf("Failed to read seekable stream rv=%08x\n", static_cast<uint32_t>(rv));
@@ -2126,13 +2126,13 @@ index e4479400a4..53f151c27e 100644
 +          mPostDataText = body; // Already nsCString
 +          // TODO: remove:
 +          printf("Captured cloned POST from .cpp so mPostDataText set to: %s\n", mPostDataText.get());
-+          rv=SetCustomDataInLoadInfo(CustomDataType::PostData);
++          rv=SetOriginellDataInLoadInfo(OriginellDataType::PostData);
 +          NS_ENSURE_SUCCESS(rv, rv);
-+          rv=SetCustomDataInLoadInfo(CustomDataType::RequestHeaders);
++          rv=SetOriginellDataInLoadInfo(OriginellDataType::RequestHeaders);
 +          NS_ENSURE_SUCCESS(rv, rv);
 +        }
 +      } else {
-+        printf("!!! Non-seekable stream cloning failed, rv=%08x, so customPostDataText and customRequestHeaders weren't set via mLoadInfo at all.\n", static_cast<uint32_t>(rv));
++        printf("!!! Non-seekable stream cloning failed, rv=%08x, so originellPostDataText and originellRequestHeaders weren't set via mLoadInfo at all.\n", static_cast<uint32_t>(rv));
 +      }
 +    }//else seekable
 +  }//if
@@ -2157,7 +2157,7 @@ index e4479400a4..53f151c27e 100644
  
 +  nsAutoCString uriSpec;
 +  mURI->GetSpec(uriSpec);
-+  mLoadInfo->SetOriginalRequestURI(NS_ConvertUTF8toUTF16(uriSpec));
++  mLoadInfo->SetOriginellRequestURI(NS_ConvertUTF8toUTF16(uriSpec));
 +
 +  if (mCanceled && mStatus == NS_BINDING_ABORTED) {
 +    //TODO: don't have a test for this except by doing an F5 after loaded page: https://docs.x.ai/docs/overview
@@ -2275,8 +2275,8 @@ index cb8b8b7406..e07fc9bd3c 100644
    nsMainThreadPtrHandle<nsIReplacedHttpResponse> mOverrideResponse;
 +
 +  //mods
-+  enum class CustomDataType { PostData, RequestHeaders };
-+  nsresult SetCustomDataInLoadInfo(CustomDataType aType);
++  enum class OriginellDataType { PostData, RequestHeaders };
++  nsresult SetOriginellDataInLoadInfo(OriginellDataType aType);
 +  nsresult ExtractStuffFromUploadStream();
 +  nsCString GetRawRequestHeaders();
  };
@@ -2299,7 +2299,7 @@ index a8372ba080..d1440c118b 100644
   * become available.
   */
 -[builtinclass, scriptable, uuid(c5a4a073-4539-49c7-a3f2-cec3f0619c6c)]
-+[builtinclass, scriptable, uuid(7d549585-2470-4534-9315-471a44be70dc)]
++[builtinclass, scriptable, uuid(5d2f89df-1bf8-4c51-8788-9c0795c9530a)]
  interface nsIHttpChannel : nsIIdentChannel
  {
 +  void getPostDataText(out AString aPostDataText);
